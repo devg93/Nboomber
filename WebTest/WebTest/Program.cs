@@ -7,209 +7,243 @@ using System.Net.Http.Headers;
 
 var baseUrl = "http://localhost:5143";
 
-// ---------- HELPERS ----------
+// ---------------- HELPERS ----------------
 async Task<HttpResponseMessage> ApiPost(string token, string path, object? body = null)
 {
     using var client = new HttpClient();
     client.DefaultRequestHeaders.Authorization =
         new AuthenticationHeaderValue("Bearer", token);
 
-    if (body != null)
+    try
     {
-        var json = JsonSerializer.Serialize(body);
-        return await client.PostAsync($"{baseUrl}{path}",
-            new StringContent(json, Encoding.UTF8, "application/json"));
+        if (body != null)
+        {
+            var json = JsonSerializer.Serialize(body);
+            return await client.PostAsync($"{baseUrl}{path}",
+                new StringContent(json, Encoding.UTF8, "application/json"));
+        }
+
+        return await client.PostAsync($"{baseUrl}{path}", null);
     }
-    return await client.PostAsync($"{baseUrl}{path}", null);
+    catch
+    {
+        return new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError);
+    }
 }
-
-#pragma warning disable CS8321
-async Task<IResponse> ApiPostWithResponse(string token, string path, object? body = null)
-{
-    using var client = new HttpClient();
-    client.DefaultRequestHeaders.Authorization =
-        new AuthenticationHeaderValue("Bearer", token);
-
-    HttpResponseMessage res;
-    if (body != null)
-    {
-        var json = JsonSerializer.Serialize(body);
-        res = await client.PostAsync($"{baseUrl}{path}",
-            new StringContent(json, Encoding.UTF8, "application/json"));
-    }
-    else
-    {
-        res = await client.PostAsync($"{baseUrl}{path}", null);
-    }
-
-    return res.IsSuccessStatusCode
-        ? Response.Ok(statusCode: ((int)res.StatusCode).ToString())
-        : Response.Fail(statusCode: ((int)res.StatusCode).ToString());
-}
-#pragma warning restore CS8321
 
 async Task<string?> CreateRide(string customerToken)
 {
-    using var client = new HttpClient();
-    client.DefaultRequestHeaders.Authorization =
-        new AuthenticationHeaderValue("Bearer", customerToken);
-
-    var body = JsonSerializer.Serialize(new
+    try
     {
-        pickupLatitude = 41.7 + Random.Shared.NextDouble() * 0.1,
-        pickupLongitude = 44.8 + Random.Shared.NextDouble() * 0.1,
-        destinationLatitude = 41.8 + Random.Shared.NextDouble() * 0.1,
-        destinationLongitude = 44.9 + Random.Shared.NextDouble() * 0.1
-    });
+        using var client = new HttpClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", customerToken);
 
-    var res = await client.PostAsync($"{baseUrl}/api/rides",
-        new StringContent(body, Encoding.UTF8, "application/json"));
+        var body = JsonSerializer.Serialize(new
+        {
+            pickupLatitude = 41.68 + Random.Shared.NextDouble() * 0.07,
+            pickupLongitude = 44.75 + Random.Shared.NextDouble() * 0.1,
+            destinationLatitude = 41.68 + Random.Shared.NextDouble() * 0.07,
+            destinationLongitude = 44.75 + Random.Shared.NextDouble() * 0.1
+        });
 
-    if (!res.IsSuccessStatusCode) return null;
+        var res = await client.PostAsync($"{baseUrl}/api/rides",
+            new StringContent(body, Encoding.UTF8, "application/json"));
 
-    var json = await res.Content.ReadAsStringAsync();
-    var doc = JsonDocument.Parse(json);
-    return doc.RootElement.GetProperty("id").GetString();
+        if (!res.IsSuccessStatusCode) return null;
+
+        var json = await res.Content.ReadAsStringAsync();
+        var doc = JsonDocument.Parse(json);
+        return doc.RootElement.GetProperty("id").GetString();
+    }
+    catch
+    {
+        return null;
+    }
 }
 
-// ---------- PRE-REGISTER DRIVERS AND CUSTOMERS ----------
+// ---------------- PRE-REGISTER ----------------
 var driverTokens = new List<string>();
 var customerTokens = new List<string>();
 
-for (int i = 0; i < 10; i++)
+// 50 DRIVERS
+for (int i = 0; i < 50; i++)
 {
     var phone = $"+995555{100000 + i}";
 
-    using var regClient = new HttpClient();
-    var regBody = JsonSerializer.Serialize(new { phoneNumber = phone, role = "Driver" });
-    await regClient.PostAsync($"{baseUrl}/api/Auth/register",
-        new StringContent(regBody, Encoding.UTF8, "application/json"));
+    using var client = new HttpClient();
 
-    var loginBody = JsonSerializer.Serialize(new { phoneNumber = phone });
-    var loginRes = await regClient.PostAsync($"{baseUrl}/api/Auth/login",
-        new StringContent(loginBody, Encoding.UTF8, "application/json"));
-    var loginJson = await loginRes.Content.ReadAsStringAsync();
-    var doc = JsonDocument.Parse(loginJson);
-    var token = doc.RootElement.GetProperty("accessToken").GetString();
-    if (token != null) driverTokens.Add(token);
+    try
+    {
+        await client.PostAsync($"{baseUrl}/api/Auth/register",
+            new StringContent(JsonSerializer.Serialize(new { phoneNumber = phone, role = "Driver" }),
+            Encoding.UTF8, "application/json"));
+
+        var loginRes = await client.PostAsync($"{baseUrl}/api/Auth/login",
+            new StringContent(JsonSerializer.Serialize(new { phoneNumber = phone }),
+            Encoding.UTF8, "application/json"));
+
+        var json = await loginRes.Content.ReadAsStringAsync();
+        var doc = JsonDocument.Parse(json);
+        var token = doc.RootElement.GetProperty("accessToken").GetString();
+
+        if (token != null) driverTokens.Add(token);
+    }
+    catch { }
 }
 
-for (int i = 0; i < 5; i++)
+// 20 CUSTOMERS
+for (int i = 0; i < 20; i++)
 {
     var phone = $"+995555{200000 + i}";
 
-    using var regClient = new HttpClient();
-    var regBody = JsonSerializer.Serialize(new { phoneNumber = phone, role = "Customer" });
-    await regClient.PostAsync($"{baseUrl}/api/Auth/register",
-        new StringContent(regBody, Encoding.UTF8, "application/json"));
+    using var client = new HttpClient();
 
-    var loginBody = JsonSerializer.Serialize(new { phoneNumber = phone });
-    var loginRes = await regClient.PostAsync($"{baseUrl}/api/Auth/login",
-        new StringContent(loginBody, Encoding.UTF8, "application/json"));
-    var loginJson = await loginRes.Content.ReadAsStringAsync();
-    var doc = JsonDocument.Parse(loginJson);
-    var token = doc.RootElement.GetProperty("accessToken").GetString();
-    if (token != null) customerTokens.Add(token);
+    try
+    {
+        await client.PostAsync($"{baseUrl}/api/Auth/register",
+            new StringContent(JsonSerializer.Serialize(new { phoneNumber = phone, role = "Customer" }),
+            Encoding.UTF8, "application/json"));
+
+        var loginRes = await client.PostAsync($"{baseUrl}/api/Auth/login",
+            new StringContent(JsonSerializer.Serialize(new { phoneNumber = phone }),
+            Encoding.UTF8, "application/json"));
+
+        var json = await loginRes.Content.ReadAsStringAsync();
+        var doc = JsonDocument.Parse(json);
+        var token = doc.RootElement.GetProperty("accessToken").GetString();
+
+        if (token != null) customerTokens.Add(token);
+    }
+    catch { }
 }
 
-Console.WriteLine($"Registered {driverTokens.Count} drivers, {customerTokens.Count} customers");
+Console.WriteLine($"Drivers: {driverTokens.Count}, Customers: {customerTokens.Count}");
 
 string RandomDriver() => driverTokens[Random.Shared.Next(driverTokens.Count)];
 string RandomCustomer() => customerTokens[Random.Shared.Next(customerTokens.Count)];
 
-// ---------- EDGE SUITE SCENARIO ----------
-var edgeScenario = Scenario.Create("edge_suite", async context =>
+// ---------------- SIGNALR POOL ----------------
+var signalRConnections = new List<HubConnection>();
+
+async Task InitSignalR()
 {
-    var driverToken = RandomDriver();
-    var customerToken = RandomCustomer();
-
-    var rideId = await CreateRide(customerToken);
-    if (rideId == null)
-        return Response.Fail(500);
-
-    var action = Random.Shared.Next(0, 7);
-
-    switch (action)
+    foreach (var token in driverTokens)
     {
-        case 0:
-            // NORMAL FLOW
-            await ApiPost(driverToken, $"/api/rides/{rideId}/accept");
-            await ApiPost(driverToken, $"/api/rides/{rideId}/arrived");
-            await ApiPost(driverToken, $"/api/rides/{rideId}/start");
-            await ApiPost(driverToken, $"/api/rides/{rideId}/complete");
-            break;
+        var conn = new HubConnectionBuilder()
+            .WithUrl($"{baseUrl}/hubs/rides", o =>
+            {
+                o.AccessTokenProvider = () => Task.FromResult<string?>(token);
+            })
+            .Build();
 
-        case 1:
-            // DOUBLE ACCEPT
-            await ApiPost(driverToken, $"/api/rides/{rideId}/accept");
-            await ApiPost(driverToken, $"/api/rides/{rideId}/accept");
-            break;
-
-        case 2:
-            // WRONG ORDER
-            await ApiPost(driverToken, $"/api/rides/{rideId}/start");
-            break;
-
-        case 3:
-            // ARRIVE BEFORE ACCEPT
-            await ApiPost(driverToken, $"/api/rides/{rideId}/arrived");
-            break;
-
-        case 4:
-            // CANCEL MID FLOW
-            await ApiPost(driverToken, $"/api/rides/{rideId}/accept");
-            await ApiPost(customerToken, $"/api/rides/{rideId}/cancel");
-            break;
-
-        case 5:
-            // CANCEL AFTER COMPLETE
-            await ApiPost(driverToken, $"/api/rides/{rideId}/accept");
-            await ApiPost(driverToken, $"/api/rides/{rideId}/arrived");
-            await ApiPost(driverToken, $"/api/rides/{rideId}/start");
-            await ApiPost(driverToken, $"/api/rides/{rideId}/complete");
-            await ApiPost(customerToken, $"/api/rides/{rideId}/cancel");
-            break;
-
-        case 6:
-            // INVALID GUID
-            await ApiPost(driverToken, "/api/rides/00000000-0000-0000-0000-000000000000/accept");
-            break;
-    }
-
-    return Response.Ok();
-})
-.WithLoadSimulations(
-    Simulation.Inject(rate: 10, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(60))
-);
-
-// ---------- HIGH CONTENTION SCENARIO ----------
-var contentionScenario = Scenario.Create("contention", async context =>
-{
-    var customerToken = RandomCustomer();
-    var rideId = await CreateRide(customerToken);
-    if (rideId == null) return Response.Fail();
-
-    // Different drivers race to accept one ride
-    var tasks = driverTokens.Select(async token =>
-    {
-        try { await ApiPost(token, $"/api/rides/{rideId}/accept"); }
+        try
+        {
+            await conn.StartAsync();
+            signalRConnections.Add(conn);
+        }
         catch { }
-    });
+    }
+}
 
-    await Task.WhenAll(tasks);
+// ---------------- SCENARIO 1: RIDE LIFECYCLE ----------------
+var rideLifecycle = Scenario.Create("ride_lifecycle", async context =>
+{
+    try
+    {
+        var customer = RandomCustomer();
+        var driver = RandomDriver();
 
-    return Response.Ok();
+        var rideId = await CreateRide(customer);
+        if (rideId == null) return Response.Fail();
+
+        await ApiPost(driver, $"/api/rides/{rideId}/accept");
+        await ApiPost(driver, $"/api/rides/{rideId}/arrived");
+        await ApiPost(driver, $"/api/rides/{rideId}/start");
+        await ApiPost(driver, $"/api/rides/{rideId}/complete");
+
+        return Response.Ok();
+    }
+    catch
+    {
+        return Response.Fail();
+    }
 })
 .WithLoadSimulations(
-    Simulation.Inject(rate: 30, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(30))
+    Simulation.Inject(rate: 20, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(60))
 );
 
-// ---------- SIGNALR SCENARIO ----------
-var signalRScenario = Scenario.Create("signalr_connections", async context =>
+// ---------------- SCENARIO 2: LOCATION UPDATES ----------------
+var locationUpdates = Scenario.Create("location_updates", async context =>
+{
+    try
+    {
+        var tasks = signalRConnections.Select(async conn =>
+        {
+            try
+            {
+                await conn.InvokeAsync("UpdateLocation", new
+                {
+                    latitude = 41.68 + Random.Shared.NextDouble() * 0.07,
+                    longitude = 44.75 + Random.Shared.NextDouble() * 0.1
+                });
+            }
+            catch { }
+        });
+
+        await Task.WhenAll(tasks);
+        await Task.Delay(3000);
+
+        return Response.Ok();
+    }
+    catch
+    {
+        return Response.Fail();
+    }
+})
+.WithLoadSimulations(
+    Simulation.Inject(rate: 1, interval: TimeSpan.FromSeconds(3), during: TimeSpan.FromSeconds(60))
+);
+
+// ---------------- SCENARIO 3: CONCURRENT ACCEPT ----------------
+var concurrentAccept = Scenario.Create("concurrent_accept", async context =>
+{
+    try
+    {
+        var rideId = await CreateRide(RandomCustomer());
+        if (rideId == null) return Response.Fail();
+
+        var drivers = driverTokens.Take(10).ToList();
+
+        var results = await Task.WhenAll(drivers.Select(async token =>
+        {
+            try
+            {
+                var res = await ApiPost(token, $"/api/rides/{rideId}/accept");
+                return res.IsSuccessStatusCode;
+            }
+            catch { return false; }
+        }));
+
+        var successCount = results.Count(x => x);
+
+        return successCount == 1 ? Response.Ok() : Response.Fail();
+    }
+    catch
+    {
+        return Response.Fail();
+    }
+})
+.WithLoadSimulations(
+    Simulation.Inject(rate: 5, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(30))
+);
+
+// ---------------- SCENARIO 4: SIGNALR STEADY ----------------
+var signalRSteady = Scenario.Create("signalr_steady", async context =>
 {
     var token = RandomDriver();
 
-    var connection = new HubConnectionBuilder()
+    var conn = new HubConnectionBuilder()
         .WithUrl($"{baseUrl}/hubs/rides", o =>
         {
             o.AccessTokenProvider = () => Task.FromResult<string?>(token);
@@ -218,31 +252,30 @@ var signalRScenario = Scenario.Create("signalr_connections", async context =>
 
     try
     {
-        await connection.StartAsync();
-        await Task.Delay(2000);
-        await connection.StopAsync();
+        await conn.StartAsync();
+        await Task.Delay(30000);
+
+        return conn.State == HubConnectionState.Connected
+            ? Response.Ok()
+            : Response.Fail();
     }
-    catch { }
+    catch
+    {
+        return Response.Fail();
+    }
     finally
     {
-        await connection.DisposeAsync();
+        await conn.DisposeAsync();
     }
-
-    return Response.Ok();
 })
 .WithLoadSimulations(
-    Simulation.Inject(rate: 10, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(30))
+    Simulation.Inject(rate: 10, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(10))
 );
 
-// ---------- RUN SEQUENTIALLY ----------
-NBomberRunner
-    .RegisterScenarios(edgeScenario)
-    .Run();
+// ---------------- RUN ----------------
+await InitSignalR();
 
-NBomberRunner
-    .RegisterScenarios(contentionScenario)
-    .Run();
-
-NBomberRunner
-    .RegisterScenarios(signalRScenario)
-    .Run();
+NBomberRunner.RegisterScenarios(rideLifecycle).Run();
+NBomberRunner.RegisterScenarios(locationUpdates).Run();
+NBomberRunner.RegisterScenarios(concurrentAccept).Run();
+NBomberRunner.RegisterScenarios(signalRSteady).Run();
