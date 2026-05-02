@@ -68,7 +68,7 @@ var driverTokens = new List<string>();
 var customerTokens = new List<string>();
 
 // 50 DRIVERS
-for (int i = 0; i < 5000; i++)
+for (int i = 0; i < 500; i++)
 {
     var phone = $"+995555{100000 + i}";
 
@@ -94,7 +94,7 @@ for (int i = 0; i < 5000; i++)
 }
 
 // 20 CUSTOMERS
-for (int i = 0; i < 20000; i++)
+for (int i = 0; i < 2000; i++)
 {
     var phone = $"+995555{200000 + i}";
 
@@ -287,6 +287,87 @@ var signalRSteady = Scenario.Create("driver_online_offline", async context =>
     Simulation.Inject(rate: 5, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(30))
 );
 
+//SCENARIO: Customer cancel race
+var customerCancelRace = Scenario.Create("customer_cancel_race", async context =>
+{
+    var customer = RandomCustomer();
+    var drivers = driverTokens.OrderBy(_ => Random.Shared.Next()).Take(5).ToList();
+
+    var rideId = await CreateRide(customer);
+    if (rideId == null) return Response.Fail();
+
+    var tasks = new List<Task>();
+
+    // drivers trying to accept
+    tasks.AddRange(drivers.Select(d => ApiPost(d, $"/api/rides/{rideId}/accept")));
+
+    // customer cancels simultaneously
+    tasks.Add(ApiPost(customer, $"/api/rides/{rideId}/cancel"));
+
+    await Task.WhenAll(tasks);
+
+    return Response.Ok();
+});
+
+// SCENARIO: Driver cancel & reassign
+var driverCancelReassign = Scenario.Create("driver_cancel_reassign", async context =>
+{
+    var customer = RandomCustomer();
+    var drivers = driverTokens.OrderBy(_ => Random.Shared.Next()).Take(2).ToList();
+
+    var rideId = await CreateRide(customer);
+    if (rideId == null) return Response.Fail();
+
+    // first driver accepts
+    await ApiPost(drivers[0], $"/api/rides/{rideId}/accept");
+
+    // cancel
+    await ApiPost(drivers[0], $"/api/rides/{rideId}/cancel");
+
+    // second driver accepts
+    var res = await ApiPost(drivers[1], $"/api/rides/{rideId}/accept");
+
+    return res.IsSuccessStatusCode ? Response.Ok() : Response.Fail();
+});
+
+
+//SCENARIO: Invalid transitions
+
+var invalidFlow = Scenario.Create("invalid_flow", async context =>
+{
+    var customer = RandomCustomer();
+    var driver = RandomDriver();
+
+    var rideId = await CreateRide(customer);
+    if (rideId == null) return Response.Fail();
+
+    // try start without accept
+    var res = await ApiPost(driver, $"/api/rides/{rideId}/start");
+
+    return res.IsSuccessStatusCode ? Response.Fail() : Response.Ok();
+});
+
+//SCENARIO: Double actions
+
+var duplicateActions = Scenario.Create("duplicate_actions", async context =>
+{
+    var customer = RandomCustomer();
+    var driver = RandomDriver();
+
+    var rideId = await CreateRide(customer);
+    if (rideId == null) return Response.Fail();
+
+    await ApiPost(driver, $"/api/rides/{rideId}/accept");
+
+    var res1 = await ApiPost(driver, $"/api/rides/{rideId}/accept");
+    var res2 = await ApiPost(driver, $"/api/rides/{rideId}/start");
+    var res3 = await ApiPost(driver, $"/api/rides/{rideId}/start");
+
+    return (!res1.IsSuccessStatusCode && !res3.IsSuccessStatusCode)
+        ? Response.Ok()
+        : Response.Fail();
+});
+
 // ---------------- RUN ----------------
 await InitSignalR();
 
@@ -294,3 +375,8 @@ NBomberRunner.RegisterScenarios(rideLifecycle).Run();
 NBomberRunner.RegisterScenarios(locationUpdates).Run();
 NBomberRunner.RegisterScenarios(concurrentAccept).Run();
 NBomberRunner.RegisterScenarios(signalRSteady).Run();
+NBomberRunner.RegisterScenarios(customerCancelRace).Run();
+NBomberRunner.RegisterScenarios(driverCancelReassign).Run();
+NBomberRunner.RegisterScenarios(invalidFlow).Run();
+
+NBomberRunner.RegisterScenarios(duplicateActions).Run();
