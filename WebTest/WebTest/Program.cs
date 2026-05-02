@@ -147,7 +147,7 @@ async Task InitSignalR()
 }
 
 // ---------------- SCENARIO 1: RIDE LIFECYCLE ----------------
-var rideLifecycle = Scenario.Create("ride_lifecycle", async context =>
+var rideLifecycle = Scenario.Create("real_taxi_flow", async context =>
 {
     try
     {
@@ -170,11 +170,14 @@ var rideLifecycle = Scenario.Create("ride_lifecycle", async context =>
     }
 })
 .WithLoadSimulations(
-    Simulation.Inject(rate: 20, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(60))
+    Simulation.Inject(rate: 3,  interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(10)),
+    Simulation.Inject(rate: 10, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(30)),
+    Simulation.Inject(rate: 20, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(60)),
+    Simulation.Inject(rate: 3,  interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(10))
 );
 
 // ---------------- SCENARIO 2: LOCATION UPDATES ----------------
-var locationUpdates = Scenario.Create("location_updates", async context =>
+var locationUpdates = Scenario.Create("cancel_flow", async context =>
 {
     try
     {
@@ -202,11 +205,11 @@ var locationUpdates = Scenario.Create("location_updates", async context =>
     }
 })
 .WithLoadSimulations(
-    Simulation.Inject(rate: 1, interval: TimeSpan.FromSeconds(3), during: TimeSpan.FromSeconds(60))
+    Simulation.Inject(rate: 3, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(30))
 );
 
 // ---------------- SCENARIO 3: CONCURRENT ACCEPT ----------------
-var concurrentAccept = Scenario.Create("concurrent_accept", async context =>
+var concurrentAccept = Scenario.Create("race_condition", async context =>
 {
     try
     {
@@ -235,11 +238,11 @@ var concurrentAccept = Scenario.Create("concurrent_accept", async context =>
     }
 })
 .WithLoadSimulations(
-    Simulation.Inject(rate: 5, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(30))
+    Simulation.Inject(rate: 2, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(30))
 );
 
 // ---------------- SCENARIO 4: SIGNALR STEADY ----------------
-var signalRSteady = Scenario.Create("signalr_steady", async context =>
+var signalRSteady = Scenario.Create("driver_online_offline", async context =>
 {
     var token = RandomDriver();
 
@@ -269,7 +272,7 @@ var signalRSteady = Scenario.Create("signalr_steady", async context =>
     }
 })
 .WithLoadSimulations(
-    Simulation.Inject(rate: 10, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(10))
+    Simulation.Inject(rate: 5, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(30))
 );
 
 // ---------------- RUN ----------------
