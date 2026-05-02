@@ -67,7 +67,7 @@ var driverTokens = new List<string>();
 var customerTokens = new List<string>();
 
 // 50 DRIVERS
-for (int i = 0; i < 50; i++)
+for (int i = 0; i < 5000; i++)
 {
     var phone = $"+995555{100000 + i}";
 
@@ -93,7 +93,7 @@ for (int i = 0; i < 50; i++)
 }
 
 // 20 CUSTOMERS
-for (int i = 0; i < 20; i++)
+for (int i = 0; i < 20000; i++)
 {
     var phone = $"+995555{200000 + i}";
 
@@ -170,10 +170,10 @@ var rideLifecycle = Scenario.Create("real_taxi_flow", async context =>
     }
 })
 .WithLoadSimulations(
-    Simulation.Inject(rate: 3,  interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(10)),
-    Simulation.Inject(rate: 10, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(30)),
-    Simulation.Inject(rate: 20, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(60)),
-    Simulation.Inject(rate: 3,  interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(10))
+    Simulation.Inject(rate: 10,  interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(10)),
+    Simulation.Inject(rate: 50,  interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(20)),
+    Simulation.Inject(rate: 200, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(120)),
+    Simulation.Inject(rate: 10,  interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromSeconds(10))
 );
 
 // ---------------- SCENARIO 2: LOCATION UPDATES ----------------
@@ -213,22 +213,33 @@ var concurrentAccept = Scenario.Create("race_condition", async context =>
 {
     try
     {
+        // Pick 5 distinct random drivers
+        var drivers = driverTokens.OrderBy(_ => Random.Shared.Next()).Take(5).ToList();
+
+        // Reset all 5 to available before the race
+        await Task.WhenAll(drivers.Select(token =>
+            ApiPost(token, "/api/drivers/me/availability", new { isAvailable = true })));
+
         var rideId = await CreateRide(RandomCustomer());
         if (rideId == null) return Response.Fail();
 
-        var drivers = driverTokens.Take(10).ToList();
-
+        // All 5 race to accept simultaneously
         var results = await Task.WhenAll(drivers.Select(async token =>
         {
             try
             {
                 var res = await ApiPost(token, $"/api/rides/{rideId}/accept");
-                return res.IsSuccessStatusCode;
+                return (token, success: res.IsSuccessStatusCode);
             }
-            catch { return false; }
+            catch { return (token, success: false); }
         }));
 
-        var successCount = results.Count(x => x);
+        var successCount = results.Count(r => r.success);
+
+        // Free the winning driver so they don't stay on an active ride
+        var winner = results.FirstOrDefault(r => r.success);
+        if (winner.token != null)
+            await ApiPost(winner.token, $"/api/rides/{rideId}/complete");
 
         return successCount == 1 ? Response.Ok() : Response.Fail();
     }
