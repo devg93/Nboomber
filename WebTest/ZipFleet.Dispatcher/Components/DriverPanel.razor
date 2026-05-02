@@ -1,0 +1,523 @@
+@inject AppState State
+@inject ApiService Api
+@inject SignalRService SignalR
+@inject ApiSettings ApiSettings
+@inject IJSRuntime JS
+@implements IDisposable
+@using System.Threading
+
+<!-- Auth Panel -->
+<div class="panel">
+    <div class="panel-title">Driver — Auth</div>
+    <div class="input-row">
+        <input type="tel" placeholder="+995 5XX XXX XXX" @bind="_phone" disabled="@State.IsDriverLoggedIn" />
+    </div>
+    <div class="btn-row">
+        <button class="btn btn-accent" @onclick="Register" disabled="@(State.IsDriverLoggedIn || _busy)">Register</button>
+        <button class="btn btn-accent" @onclick="Login" disabled="@(State.IsDriverLoggedIn || _busy)">Login</button>
+        @if (State.IsDriverLoggedIn)
+        {
+            <button class="btn btn-danger btn-sm" @onclick="Logout">Logout</button>
+        }
+    </div>
+    @if (State.IsDriverLoggedIn)
+    {
+        <div class="coord-display" style="margin-top:6px;">Logged in as @State.DriverPhone</div>
+    }
+    @if (!string.IsNullOrEmpty(_authError))
+    {
+        <div style="color:var(--danger);font-size:11px;margin-top:4px;">@_authError</div>
+    }
+</div>
+
+@if (State.IsDriverLoggedIn)
+{
+    <!-- Availability Toggle -->
+    <div class="panel">
+        <div class="panel-title">Availability</div>
+        <div class="toggle-row">
+            <label class="toggle-switch">
+                <input type="checkbox" checked="@State.DriverIsOnline" @onchange="ToggleAvailability" disabled="@_busy" />
+                <div class="toggle-track"></div>
+                <div class="toggle-thumb"></div>
+            </label>
+            <span class="toggle-label" style="color:@(State.DriverIsOnline ? "var(--accent)" : "var(--text-dim)")">
+                @(State.DriverIsOnline ? "Online" : "Offline")
+            </span>
+        </div>
+    </div>
+
+    <!-- Location Panel -->
+    <div class="panel">
+        <div class="panel-title">Location</div>
+        <p class="hint">Click map to set driver location</p>
+        @if (_driverLat.HasValue)
+        {
+            <div class="coord-display">🚗 @_driverLat.Value.ToString("F5"), @_driverLng!.Value.ToString("F5")</div>
+        }
+        else
+        {
+            <div class="coord-display" style="color:var(--text-dim);">🚗 No location set</div>
+        }
+    </div>
+
+    @* <!-- Incoming Rides Panel (when online, no active ride) --> *@
+    @* @if (State.DriverIsOnline && string.IsNullOrEmpty(State.DriverActiveRideId)) *@
+    @* { *@
+    @*     <div class="panel"> *@
+    @*         <div class="panel-title">Incoming Rides (@_rideOffers.Count)</div> *@
+    @*         @if (_rideOffers.Count == 0) *@
+    @*         { *@
+    @*             <div style="color:var(--text-dim);font-size:11px;text-align:center;padding:8px 0;">Waiting for ride requests…</div> *@
+    @*         } *@
+    @*         @foreach (var offer in _rideOffers.ToList()) *@
+    @*         { *@
+    @*             <RideOfferCard Ride="offer" OnAccept="AcceptRide" /> *@
+    @*         } *@
+    @*     </div> *@
+    @* } *@
+    
+    <!-- Incoming Rides Panel -->
+    @if (State.DriverIsOnline && string.IsNullOrEmpty(State.DriverActiveRideId))
+    {
+        <div class="panel">
+            <div class="panel-title">Incoming Rides (@_rideOffers.Count)</div>
+
+            @if (_rideOffers.Count == 0)
+            {
+                <div style="color:var(--text-dim);font-size:11px;text-align:center;padding:8px 0;">
+                    Waiting for ride requests…
+                </div>
+            }
+
+            @foreach (var offer in _rideOffers.ToList())
+            {
+                <div class="ride-card @(offer.TimeRemaining < TimeSpan.FromSeconds(15) ? "ride-offer-urgent" : "")">
+                    <div class="ride-card-header">
+                        <span class="ride-id">@offer.Id[..Math.Min(8, offer.Id.Length)]…</span>
+                        <span class="ride-price">@offer.Price.ToString("F2") GEL</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Distance</span>
+                        <span class="ride-dist">@offer.DistanceKm.ToString("F1") km</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Expires in</span>
+                        <span class="countdown @(offer.TimeRemaining < TimeSpan.FromSeconds(15) ? "countdown-urgent" : "")">
+                            ⏱ @offer.CountdownText
+                        </span>
+                    </div>
+                    <button class="btn btn-accent btn-sm btn-block" style="margin-top:6px;"
+                            @onclick="() => AcceptRide(offer.Id)">
+                        Accept
+                    </button>
+                </div>
+            }
+        </div>
+    }
+
+    <!-- Active Ride Panel -->
+    @if (!string.IsNullOrEmpty(State.DriverActiveRideId))
+    {
+        <div class="panel">
+            <div class="panel-title">Active Ride</div>
+            <div class="info-row">
+                <span class="info-label">Ride ID</span>
+                <span class="info-value">@State.DriverActiveRideId[..Math.Min(8, State.DriverActiveRideId.Length)]…</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Status</span>
+                <span class="status-badge status-@State.DriverActiveRideStatus.ToLower()">@State.DriverActiveRideStatus</span>
+            </div>
+
+            <div style="margin-top:8px;">
+                @if (State.DriverActiveRideStatus == "Accepted")
+                {
+                    <div class="btn-row">
+                        <button class="btn btn-accent" style="flex:1" @onclick="ArriveAtPickup" disabled="@_busy">
+                            Arrived at Pickup
+                        </button>
+                        <button class="btn btn-danger btn-sm" @onclick="DeclineRide" disabled="@_busy">
+                            Decline
+                        </button>
+                    </div>
+                }
+                else if (State.DriverActiveRideStatus == "Arrived")
+                {
+                    <div class="btn-row">
+                        <button class="btn btn-accent" style="flex:1" @onclick="StartTrip" disabled="@_busy">
+                            Start Trip
+                        </button>
+                        <button class="btn btn-danger btn-sm" @onclick="DeclineRide" disabled="@_busy">
+                            Decline
+                        </button>
+                    </div>
+                }
+                else if (State.DriverActiveRideStatus == "OnTheWay")
+                {
+                    <button class="btn btn-accent btn-block" @onclick="CompleteTrip" disabled="@_busy">
+                        Complete Trip
+                    </button>
+                }
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public EventCallback<LogEntry> OnLog { get; set; }
+
+    private string _phone = "";
+    private string _authError = "";
+    private bool _busy;
+    private double? _driverLat;
+    private double? _driverLng;
+    private List<RideOffer> _rideOffers = new();
+    private Timer? _countdownTimer;
+
+    protected override void OnInitialized()
+    {
+        MapComponent.MapClicked += HandleMapClick;
+        SignalR.OnNewRideAvailable += HandleNewRide;
+        SignalR.OnRideTaken += HandleRideTaken;
+        SignalR.OnRideCancelled += HandleRideCancelled;
+
+        _countdownTimer = new Timer(_ =>
+        {
+            _ = InvokeAsync(() =>
+            {
+                if (_rideOffers.Count == 0) return;
+                foreach (var expired in _rideOffers.Where(r => r.IsExpired).ToList())
+                    Log($"Ride offer expired: {expired.Id[..Math.Min(8, expired.Id.Length)]}…", "warning");
+                _rideOffers.RemoveAll(r => r.IsExpired);
+                StateHasChanged();
+            });
+        }, null, TimeSpan.Zero, TimeSpan.FromSeconds(1));
+    }
+
+    private async void HandleMapClick(double lat, double lng)
+    {
+        if (!State.IsDriverLoggedIn) return;
+        _driverLat = lat;
+        _driverLng = lng;
+        await JS.InvokeVoidAsync("leafletInterop.removeMarker", "driver");
+        await JS.InvokeVoidAsync("leafletInterop.addMarker", "driver", lat, lng, "🚗", $"Driver: {lat:F4}, {lng:F4}");
+
+        try
+        {
+            await Api.UpdateLocationAsync(lat, lng);
+            Log($"Location updated: {lat:F4}, {lng:F4}", "success");
+        }
+        catch (Exception ex)
+        {
+            Log($"Location update failed: {ex.Message}", "error");
+        }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void HandleNewRide(string json)
+    {
+        try
+        {
+            var evt = System.Text.Json.JsonSerializer.Deserialize<NewRideAvailableEvent>(json,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (evt != null)
+            {
+                var offer = new RideOffer
+                {
+                    Id = evt.RideId,
+                    Price = evt.Price,
+                    DistanceKm = evt.Distance,
+                    ReceivedAt = DateTime.UtcNow
+                };
+                _rideOffers.RemoveAll(r => r.Id == evt.RideId); // replace stale entry on re-dispatch
+                _rideOffers.Add(offer);
+                Log($"New ride offer: {offer.Id[..Math.Min(8, offer.Id.Length)]}… {offer.Price:F2} GEL", "warning");
+                InvokeAsync(StateHasChanged);
+            }
+        }
+        catch { }
+    }
+
+    private void HandleRideTaken(string json)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("rideId", out var idProp) ||
+                doc.RootElement.TryGetProperty("RideId", out idProp))
+            {
+                var id = idProp.GetString();
+                _rideOffers.RemoveAll(r => r.Id == id);
+                Log($"Ride taken: {id?[..Math.Min(8, id?.Length ?? 0)]}…", "info");
+                InvokeAsync(StateHasChanged);
+            }
+        }
+        catch { }
+    }
+
+    private void HandleRideCancelled(string json)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("rideId", out var idProp) ||
+                doc.RootElement.TryGetProperty("RideId", out idProp))
+            {
+                var id = idProp.GetString();
+                _rideOffers.RemoveAll(r => r.Id == id);
+
+                if (!string.IsNullOrEmpty(State.DriverActiveRideId) && State.DriverActiveRideId == id)
+                {
+                    State.ClearDriverActiveRide();
+                    Log("Customer cancelled the ride", "warning");
+                }
+            }
+        }
+        catch { }
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task Register()
+    {
+        _authError = "";
+        _busy = true;
+        try
+        {
+            var (token, userId) = await Api.RegisterAsync(_phone, "Driver");
+            Api.SetToken(token);
+            State.SetDriverAuth(token, userId, _phone);
+            await ConnectHub();
+            await RecoverActiveRide();
+            Log($"Registered driver {_phone}", "success");
+        }
+        catch (Exception ex)
+        {
+            _authError = ex.Message;
+            Log($"Register failed: {ex.Message}", "error");
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task Login()
+    {
+        _authError = "";
+        _busy = true;
+        try
+        {
+            var result = await Api.LoginAsync(_phone);
+            Api.SetToken(result.AccessToken);
+            State.SetDriverAuth(result.AccessToken, "", _phone);
+            await ConnectHub();
+            await RecoverActiveRide();
+            Log($"Driver login OK: {_phone}", "success");
+        }
+        catch (Exception ex)
+        {
+            _authError = ex.Message;
+            Log($"Login failed: {ex.Message}", "error");
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ConnectHub()
+    {
+        SignalR.Configure($"{ApiSettings.BaseUrl}/hubs/rides", () => State.DriverToken ?? "");
+        await SignalR.ConnectAsync();
+        Log("SignalR connected", "success");
+    }
+
+    private async Task RecoverActiveRide()
+    {
+        try
+        {
+            var activeRide = await Api.GetActiveRideAsync();
+            if (activeRide != null)
+            {
+                // Map backend status names to the internal names the UI buttons check against
+                var uiStatus = activeRide.StatusText switch
+                {
+                    "DriverAssigned" => "Accepted",
+                    _ => activeRide.StatusText
+                };
+                State.SetDriverActiveRide(activeRide.Id.ToString(), uiStatus);
+                Log($"Recovered active ride: {activeRide.Id.ToString()[..8]}…", "success");
+            }
+        }
+        catch { }
+    }
+
+    private async Task Logout()
+    {
+        try { await SignalR.InvokeAsync("GoOffline"); } catch { }
+        await SignalR.DisconnectAsync();
+        Api.ClearToken();
+        State.SetDriverAuth("", "", "");
+        State.SetDriverOnline(false);
+        State.ClearDriverActiveRide();
+        _phone = "";
+        _rideOffers.Clear();
+        _driverLat = null;
+        _driverLng = null;
+        _ = JS.InvokeVoidAsync("leafletInterop.removeMarker", "driver");
+    }
+
+    private async Task ToggleAvailability(ChangeEventArgs e)
+    {
+        var online = (bool)(e.Value ?? false);
+        _busy = true;
+        try
+        {
+            await Api.ToggleAvailabilityAsync(online);
+            State.SetDriverOnline(online);
+
+            if (online)
+            {
+                try { await SignalR.InvokeAsync("JoinDriversGroup"); }
+                catch { /* Already in group from OnConnectedAsync — safe to ignore */ }
+            }
+            else
+            {
+                try { await SignalR.InvokeAsync("LeaveDriversGroup"); }
+                catch { /* Already in group from OnConnectedAsync — safe to ignore */ }
+            }
+
+            Log($"Driver now {(online ? "Online" : "Offline")}", online ? "success" : "warning");
+        }
+        catch (Exception ex)
+        {
+            Log($"Availability toggle failed: {ex.Message}", "error");
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task AcceptRide(string rideId)
+    {
+        _busy = true;
+        try
+        {
+            var ride = await Api.AcceptRideAsync(rideId);
+            State.SetDriverActiveRide(ride.Id.ToString(), "Accepted");
+            _rideOffers.Clear();
+            Log($"Accepted ride: {rideId[..Math.Min(8, rideId.Length)]}…", "success");
+        }
+        catch (Exception ex)
+        {
+            Log($"Accept failed: {ex.Message}", "error");
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task DeclineRide()
+    {
+        if (string.IsNullOrEmpty(State.DriverActiveRideId)) return;
+        _busy = true;
+        try
+        {
+            await Api.DeclineRideAsync(State.DriverActiveRideId);
+            State.ClearDriverActiveRide();
+            Log("Ride declined", "warning");
+        }
+        catch (Exception ex)
+        {
+            Log($"Decline failed: {ex.Message}", "error");
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ArriveAtPickup()
+    {
+        if (string.IsNullOrEmpty(State.DriverActiveRideId)) return;
+        _busy = true;
+        try
+        {
+            decimal lat, lng;
+            try
+            {
+                var pos = await JS.InvokeAsync<GeoPosition>("appInterop.getCurrentPosition");
+                lat = (decimal)pos.Latitude;
+                lng = (decimal)pos.Longitude;
+                Log($"GPS: {lat:F5}, {lng:F5} (±{pos.Accuracy:F0}m)", "info");
+            }
+            catch
+            {
+                if (_driverLat.HasValue && _driverLng.HasValue)
+                {
+                    lat = (decimal)_driverLat.Value;
+                    lng = (decimal)_driverLng.Value;
+                    Log($"Using map location: {lat:F5}, {lng:F5}", "info");
+                }
+                else
+                {
+                    Log("Cannot determine location. Click map or allow GPS.", "error");
+                    return;
+                }
+            }
+
+            await Api.ArriveAsync(State.DriverActiveRideId, lat, lng);
+            State.UpdateDriverActiveRideStatus("Arrived");
+            Log("Arrived at pickup", "success");
+        }
+        catch (Exception ex) { Log($"Arrive failed: {ex.Message}", "error"); }
+        finally { _busy = false; }
+    }
+
+    private async Task StartTrip()
+    {
+        if (string.IsNullOrEmpty(State.DriverActiveRideId)) return;
+        _busy = true;
+        try
+        {
+            await Api.StartAsync(State.DriverActiveRideId);
+            State.UpdateDriverActiveRideStatus("OnTheWay");
+            Log("Trip started", "success");
+        }
+        catch (Exception ex) { Log($"Start failed: {ex.Message}", "error"); }
+        finally { _busy = false; }
+    }
+
+    private async Task CompleteTrip()
+    {
+        if (string.IsNullOrEmpty(State.DriverActiveRideId)) return;
+        _busy = true;
+        try
+        {
+            await Api.CompleteAsync(State.DriverActiveRideId);
+            State.ClearDriverActiveRide();
+            Log("Trip completed!", "success");
+        }
+        catch (Exception ex) { Log($"Complete failed: {ex.Message}", "error"); }
+        finally { _busy = false; }
+    }
+
+    private void Log(string message, string level = "info")
+        => OnLog.InvokeAsync(new LogEntry { Message = message, Level = level });
+
+    private class RideOffer
+    {
+        public string Id { get; set; } = "";
+        public decimal Price { get; set; }
+        public double DistanceKm { get; set; }
+        public DateTime ReceivedAt { get; set; } = DateTime.UtcNow;
+        public TimeSpan TimeRemaining => TimeSpan.FromMinutes(1) - (DateTime.UtcNow - ReceivedAt);
+        public bool IsExpired => TimeRemaining <= TimeSpan.Zero;
+        public string CountdownText
+        {
+            get
+            {
+                var t = TimeRemaining;
+                if (t <= TimeSpan.Zero) return "Expired";
+                return $"00:{t.Seconds:D2}";
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        _countdownTimer?.Dispose();
+        MapComponent.MapClicked -= HandleMapClick;
+        SignalR.OnNewRideAvailable -= HandleNewRide;
+        SignalR.OnRideTaken -= HandleRideTaken;
+        SignalR.OnRideCancelled -= HandleRideCancelled;
+    }
+}

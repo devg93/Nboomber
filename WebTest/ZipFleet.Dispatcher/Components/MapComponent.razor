@@ -1,0 +1,33 @@
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<div id="map"></div>
+
+@code {
+    private DotNetObjectReference<MapComponent>? _objRef;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _objRef = DotNetObjectReference.Create(this);
+            await Task.Delay(100); // let DOM settle before Leaflet reads element dimensions
+            await JS.InvokeVoidAsync("leafletInterop.initMap", "map", 41.7151, 44.8271, 13);
+            await JS.InvokeVoidAsync("leafletInterop.enableClickHandler", _objRef);
+        }
+    }
+
+    [JSInvokable]
+    public void OnMapClicked(double lat, double lng)
+    {
+        MapClicked?.Invoke(lat, lng);
+    }
+
+    public static event Action<double, double>? MapClicked;
+
+    public async ValueTask DisposeAsync()
+    {
+        _objRef?.Dispose();
+        await Task.CompletedTask;
+    }
+}

@@ -1,0 +1,17 @@
+@using ZipFleet.Dispatcher.Models
+
+<div class="panel event-log">
+    <div class="panel-title">Event Log</div>
+    <div class="log-entries">
+        @foreach (var entry in Entries)
+        {
+            <div class="log-entry log-@entry.Level">
+                <span class="log-time">@entry.Time.ToString("HH:mm:ss")</span>@entry.Message
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public List<LogEntry> Entries { get; set; } = new();
+}

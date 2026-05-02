@@ -1,0 +1,67 @@
+@page "/"
+@inject AppState State
+@inject SignalRService SignalR
+@inject ApiService Api
+@inject ApiSettings ApiSettings
+@implements IDisposable
+
+<PageTitle>ZipFleet Dispatcher</PageTitle>
+
+<div class="dispatcher-shell">
+    <header class="top-header">
+        <span class="logo">ZIPFLEET</span>
+        <button class="tab-btn @(State.ActiveRole == "Customer" ? "active-customer" : "")"
+                @onclick='() => State.SetRole("Customer")'>Customer</button>
+        <button class="tab-btn @(State.ActiveRole == "Driver" ? "active-driver" : "")"
+                @onclick='() => State.SetRole("Driver")'>Driver</button>
+        <div class="spacer"></div>
+        <div class="connection-status">
+            <div class="status-dot @(SignalR.IsConnected ? "connected" : "")"></div>
+            <span>@(SignalR.IsConnected ? "Connected" : "Disconnected")</span>
+        </div>
+        <span class="api-url">@ApiSettings.BaseUrl</span>
+    </header>
+
+    <div class="main-content">
+        <aside class="sidebar">
+            <div class="panels-area">
+                @if (State.ActiveRole == "Customer")
+                {
+                    <CustomerPanel OnLog="AddLog" />
+                }
+                else
+                {
+                    <DriverPanel OnLog="AddLog" />
+                }
+                <EventLog Entries="_logEntries" />
+            </div>
+        </aside>
+        <div class="map-area">
+            <MapComponent />
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<LogEntry> _logEntries = new();
+
+    protected override void OnInitialized()
+    {
+        State.OnChange += StateHasChanged;
+        SignalR.OnConnectionChanged += StateHasChanged;
+    }
+
+    private void AddLog(LogEntry entry)
+    {
+        _logEntries.Insert(0, entry);
+        if (_logEntries.Count > 50)
+            _logEntries.RemoveAt(_logEntries.Count - 1);
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        State.OnChange -= StateHasChanged;
+        SignalR.OnConnectionChanged -= StateHasChanged;
+    }
+}

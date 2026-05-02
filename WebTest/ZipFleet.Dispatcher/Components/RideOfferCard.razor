@@ -1,0 +1,20 @@
+@using ZipFleet.Dispatcher.Models
+
+<div class="ride-card">
+    <div class="ride-card-header">
+        <span class="ride-id">@Ride.RideId[..Math.Min(8, Ride.RideId.Length)]…</span>
+        <span class="ride-price">$@Ride.Price.ToString("F2")</span>
+    </div>
+    <div class="info-row">
+        <span class="info-label">Distance</span>
+        <span class="ride-dist">@Ride.Distance.ToString("F1") km</span>
+    </div>
+    <button class="btn btn-accent btn-sm btn-block" @onclick="() => OnAccept.InvokeAsync(Ride.RideId)">
+        Accept
+    </button>
+</div>
+
+@code {
+    [Parameter] public NewRideAvailableEvent Ride { get; set; } = null!;
+    [Parameter] public EventCallback<string> OnAccept { get; set; }
+}
