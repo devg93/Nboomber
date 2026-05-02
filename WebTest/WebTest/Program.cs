@@ -12,6 +12,7 @@ async Task<HttpResponseMessage> ApiPost(string token, string path, object? body 
 {
     using var client = new HttpClient();
     client.DefaultRequestHeaders.Authorization =
+        
         new AuthenticationHeaderValue("Bearer", token);
 
     try
