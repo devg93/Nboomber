@@ -1,3 +1,389 @@
+@* @inject AppState State *@
+@* @inject ApiService Api *@
+@* @inject SignalRService SignalR *@
+@* @inject ApiSettings ApiSettings *@
+@* @inject IJSRuntime JS *@
+@* @implements IDisposable *@
+@* @using System.Threading *@
+@* *@
+@* <!-- Auth Panel --> *@
+@* <div class="panel"> *@
+@*     <div class="panel-title">Customer — Auth</div> *@
+@*     <div class="input-row"> *@
+@*         <input type="tel" placeholder="+995 5XX XXX XXX" @bind="_phone" disabled="@State.IsCustomerLoggedIn" /> *@
+@*     </div> *@
+@*     <div class="btn-row"> *@
+@*         <button class="btn btn-customer" @onclick="Register" disabled="@(State.IsCustomerLoggedIn || _busy)">Register</button> *@
+@*         <button class="btn btn-accent" @onclick="Login" disabled="@(State.IsCustomerLoggedIn || _busy)">Login</button> *@
+@*         @if (State.IsCustomerLoggedIn) *@
+@*         { *@
+@*             <button class="btn btn-danger btn-sm" @onclick="Logout">Logout</button> *@
+@*         } *@
+@*     </div> *@
+@*     @if (State.IsCustomerLoggedIn) *@
+@*     { *@
+@*         <div class="coord-display" style="margin-top:6px;">Logged in as @State.CustomerPhone</div> *@
+@*     } *@
+@*     @if (!string.IsNullOrEmpty(_authError)) *@
+@*     { *@
+@*         <div style="color:var(--danger);font-size:11px;margin-top:4px;">@_authError</div> *@
+@*     } *@
+@* </div> *@
+@* *@
+@* <!-- Create Ride Panel --> *@
+@* @if (State.IsCustomerLoggedIn && string.IsNullOrEmpty(State.CustomerRideId)) *@
+@* { *@
+@*     <div class="panel"> *@
+@*         <div class="panel-title">Create Ride</div> *@
+@*         <p class="hint">Click map: 1st click = pickup 📍, 2nd click = destination 🏁</p> *@
+@* *@
+@*         @if (_pickup.HasValue) *@
+@*         { *@
+@*             <div class="coord-display">📍 Pickup: @_pickup.Value.lat.ToString("F5"), @_pickup.Value.lng.ToString("F5")</div> *@
+@*         } *@
+@*         else *@
+@*         { *@
+@*             <div class="coord-display" style="color:var(--text-dim);">📍 Pickup: waiting for map click…</div> *@
+@*         } *@
+@* *@
+@*         @if (_destination.HasValue) *@
+@*         { *@
+@*             <div class="coord-display" style="margin-top:4px;">🏁 Dest: @_destination.Value.lat.ToString("F5"), @_destination.Value.lng.ToString("F5")</div> *@
+@*         } *@
+@*         else *@
+@*         { *@
+@*             <div class="coord-display" style="margin-top:4px;color:var(--text-dim);">🏁 Dest: waiting for map click…</div> *@
+@*         } *@
+@* *@
+@*         <div class="btn-row" style="margin-top:8px;"> *@
+@*             <button class="btn btn-customer" @onclick="CreateRide" *@
+@*                     disabled="@(!_pickup.HasValue || !_destination.HasValue || _busy)"> *@
+@*                 Create Ride *@
+@*             </button> *@
+@*             <button class="btn btn-danger btn-sm" @onclick="ClearMarkers">Clear</button> *@
+@*         </div> *@
+@*     </div> *@
+@* } *@
+@* *@
+@* <!-- Active Ride Panel --> *@
+@* @if (!string.IsNullOrEmpty(State.CustomerRideId)) *@
+@* { *@
+@*     <div class="panel"> *@
+@*         <div class="panel-title">Active Ride</div> *@
+@*         <div class="info-row"> *@
+@*             <span class="info-label">Ride ID</span> *@
+@*             <span class="info-value">@State.CustomerRideId[..Math.Min(8, State.CustomerRideId.Length)]…</span> *@
+@*         </div> *@
+@*         <div class="info-row"> *@
+@*             <span class="info-label">Status</span> *@
+@*             <span class="status-badge status-@State.CustomerRideStatus?.ToLower()">@State.CustomerRideStatus</span> *@
+@*         </div> *@
+@* *@
+@*         @if (State.CustomerRideStatus == "Requested" && _rideTimer != null) *@
+@*         { *@
+@*             <div class="countdown-container"> *@
+@*                 <div class="countdown-label">Driver search expires in</div> *@
+@*                 <div class="countdown @(IsUrgent ? "countdown-urgent" : "")"> *@
+@*                     ⏱ @CountdownText *@
+@*                 </div> *@
+@*                 @if (IsUrgent) *@
+@*                 { *@
+@*                     <div class="countdown-warning">Hurry! Ride will be cancelled soon</div> *@
+@*                 } *@
+@*             </div> *@
+@*         } *@
+@* *@
+@*         <div style="margin-top:8px;"> *@
+@*             <button class="btn btn-danger btn-sm" @onclick="CancelRide" *@
+@*                     disabled="@(State.CustomerRideStatus == "Completed" || State.CustomerRideStatus == "Cancelled" || _busy)"> *@
+@*                 Cancel Ride *@
+@*             </button> *@
+@*         </div> *@
+@*     </div> *@
+@* } *@
+@* *@
+@* @code { *@
+@*     [Parameter] public EventCallback<LogEntry> OnLog { get; set; } *@
+@* *@
+@*     private string _phone = ""; *@
+@*     private string _authError = ""; *@
+@*     private bool _busy; *@
+@*     private (double lat, double lng)? _pickup; *@
+@*     private (double lat, double lng)? _destination; *@
+@*     private int _clickCount; *@
+@* *@
+@*     private Timer? _rideTimer; *@
+@*     private DateTime _rideCreatedAt; *@
+@*     private TimeSpan _timeRemaining = TimeSpan.FromMinutes(1); *@
+@* *@
+@*     private string CountdownText *@
+@*     { *@
+@*         get *@
+@*         { *@
+@*             if (_timeRemaining <= TimeSpan.Zero) return "00:00"; *@
+@*             return $"00:{_timeRemaining.Seconds:D2}"; *@
+@*         } *@
+@*     } *@
+@* *@
+@*     private bool IsUrgent => _timeRemaining < TimeSpan.FromSeconds(15); *@
+@* *@
+@*     protected override void OnInitialized() *@
+@*     { *@
+@*         MapComponent.MapClicked += HandleMapClick; *@
+@*         SignalR.OnDriverFound += async _ => await HandleSignalR("Accepted", "DriverFound"); *@
+@*         SignalR.OnDriverArrived += async _ => await HandleSignalR("Arrived", "DriverArrived"); *@
+@*         SignalR.OnRideStarted += async _ => await HandleSignalR("OnTheWay", "RideStarted"); *@
+@*         SignalR.OnRideCompleted += async _ => await HandleSignalR("Completed", "RideCompleted"); *@
+@*         SignalR.OnRideDeclined += HandleRideDeclined; *@
+@*     } *@
+@* *@
+@*     private void HandleMapClick(double lat, double lng) *@
+@*     { *@
+@*         if (!State.IsCustomerLoggedIn || !string.IsNullOrEmpty(State.CustomerRideId)) return; *@
+@* *@
+@*         _clickCount++; *@
+@*         if (_clickCount % 2 == 1) *@
+@*         { *@
+@*             _pickup = (lat, lng); *@
+@*             _ = JS.InvokeVoidAsync("leafletInterop.removeMarker", "pickup"); *@
+@*             _ = JS.InvokeVoidAsync("leafletInterop.addMarker", "pickup", lat, lng, "📍", $"Pickup: {lat:F4}, {lng:F4}"); *@
+@*         } *@
+@*         else *@
+@*         { *@
+@*             _destination = (lat, lng); *@
+@*             _ = JS.InvokeVoidAsync("leafletInterop.removeMarker", "destination"); *@
+@*             _ = JS.InvokeVoidAsync("leafletInterop.addMarker", "destination", lat, lng, "🏁", $"Destination: {lat:F4}, {lng:F4}"); *@
+@*         } *@
+@*         InvokeAsync(StateHasChanged); *@
+@*     } *@
+@* *@
+@*     private async Task Register() *@
+@*     { *@
+@*         _authError = ""; *@
+@*         _busy = true; *@
+@*         try *@
+@*         { *@
+@*             var (token, userId) = await Api.RegisterAsync(_phone, "Customer"); *@
+@*             Api.SetToken(token); *@
+@*             State.SetCustomerAuth(token, userId, _phone); *@
+@*             await ConnectHub(); *@
+@*             await RecoverActiveRide(); *@
+@*             Log($"Registered customer {_phone}", "success"); *@
+@*         } *@
+@*         catch (Exception ex) *@
+@*         { *@
+@*             _authError = ex.Message; *@
+@*             Log($"Register failed: {ex.Message}", "error"); *@
+@*         } *@
+@*         finally { _busy = false; } *@
+@*     } *@
+@* *@
+@*     private async Task Login() *@
+@*     { *@
+@*         _authError = ""; *@
+@*         _busy = true; *@
+@*         try *@
+@*         { *@
+@*             var result = await Api.LoginAsync(_phone); *@
+@*             Api.SetToken(result.AccessToken); *@
+@*             State.SetCustomerAuth(result.AccessToken, "", _phone); *@
+@*             await ConnectHub(); *@
+@*             await RecoverActiveRide(); *@
+@*             Log($"Customer login OK: {_phone}", "success"); *@
+@*         } *@
+@*         catch (Exception ex) *@
+@*         { *@
+@*             _authError = ex.Message; *@
+@*             Log($"Login failed: {ex.Message}", "error"); *@
+@*         } *@
+@*         finally { _busy = false; } *@
+@*     } *@
+@* *@
+@*     private async Task ConnectHub() *@
+@*     { *@
+@*         SignalR.Configure($"{ApiSettings.BaseUrl}/hubs/rides", () => State.CustomerToken ?? ""); *@
+@*         await SignalR.ConnectAsync(); *@
+@*         Log("SignalR connected", "success"); *@
+@*     } *@
+@* *@
+@*     private async Task RecoverActiveRide() *@
+@*     { *@
+@*         try *@
+@*         { *@
+@*             var activeRide = await Api.GetActiveRideAsync(); *@
+@*             if (activeRide != null) *@
+@*             { *@
+@*                 State.SetCustomerRide(activeRide.Id.ToString(), activeRide.StatusText); *@
+@*                 Log($"Recovered active ride: {activeRide.Id.ToString()[..8]}…", "success"); *@
+@*                 if (activeRide.StatusText == "Requested") *@
+@*                     StartCountdown(); *@
+@*             } *@
+@*         } *@
+@*         catch { } *@
+@*     } *@
+@* *@
+@*     private async Task Logout() *@
+@*     { *@
+@*         _rideTimer?.Dispose(); *@
+@*         _rideTimer = null; *@
+@*         if (!string.IsNullOrEmpty(State.CustomerRideId)) *@
+@*         { *@
+@*             try { await Api.CancelAsync(State.CustomerRideId); } catch { } *@
+@*         } *@
+@*         await SignalR.DisconnectAsync(); *@
+@*         Api.ClearToken(); *@
+@*         State.SetCustomerAuth("", "", ""); *@
+@*         State.ClearCustomerRide(); *@
+@*         _phone = ""; *@
+@*         _clickCount = 0; *@
+@*         _pickup = null; *@
+@*         _destination = null; *@
+@*         _ = JS.InvokeVoidAsync("leafletInterop.clearMarkers"); *@
+@*     } *@
+@* *@
+@*     private async Task CreateRide() *@
+@*     { *@
+@*         if (!_pickup.HasValue || !_destination.HasValue) return; *@
+@*         _busy = true; *@
+@*         try *@
+@*         { *@
+@*             var ride = await Api.CreateRideAsync( *@
+@*                 (decimal)_pickup.Value.lat, (decimal)_pickup.Value.lng, *@
+@*                 (decimal)_destination.Value.lat, (decimal)_destination.Value.lng); *@
+@*             State.SetCustomerRide(ride.Id.ToString(), "Requested"); *@
+@*             Log($"Ride created! Price: {ride.Price:F2} GEL, Distance: {ride.DistanceKm:F1} km", "success"); *@
+@*             StartCountdown(); *@
+@*         } *@
+@*         catch (Exception ex) *@
+@*         { *@
+@*             Log($"Create ride failed: {ex.Message}", "error"); *@
+@*         } *@
+@*         finally { _busy = false; } *@
+@*     } *@
+@* *@
+@*     private async Task CancelRide() *@
+@*     { *@
+@*         if (string.IsNullOrEmpty(State.CustomerRideId)) return; *@
+@*         _rideTimer?.Dispose(); *@
+@*         _rideTimer = null; *@
+@*         _busy = true; *@
+@*         try *@
+@*         { *@
+@*             await Api.CancelAsync(State.CustomerRideId); *@
+@*             State.UpdateCustomerRideStatus("Cancelled"); *@
+@*             Log($"Ride cancelled", "warning"); *@
+@*             await Task.Delay(1500); *@
+@*             State.ClearCustomerRide(); *@
+@*             ClearMarkersLocal(); *@
+@*         } *@
+@*         catch (Exception ex) *@
+@*         { *@
+@*             Log($"Cancel failed: {ex.Message}", "error"); *@
+@*         } *@
+@*         finally { _busy = false; } *@
+@*     } *@
+@* *@
+@*     private void ClearMarkers() *@
+@*     { *@
+@*         _clickCount = 0; *@
+@*         _pickup = null; *@
+@*         _destination = null; *@
+@*         _ = JS.InvokeVoidAsync("leafletInterop.removeMarker", "pickup"); *@
+@*         _ = JS.InvokeVoidAsync("leafletInterop.removeMarker", "destination"); *@
+@*     } *@
+@* *@
+@*     private void ClearMarkersLocal() *@
+@*     { *@
+@*         _clickCount = 0; *@
+@*         _pickup = null; *@
+@*         _destination = null; *@
+@*     } *@
+@* *@
+@*     private async Task HandleSignalR(string status, string eventName) *@
+@*     { *@
+@*         if (status != "Requested") *@
+@*         { *@
+@*             _rideTimer?.Dispose(); *@
+@*             _rideTimer = null; *@
+@*         } *@
+@*         State.UpdateCustomerRideStatus(status); *@
+@*         Log($"SignalR {eventName} → {status}", "success"); *@
+@*         if (status == "Completed") *@
+@*         { *@
+@*             await Task.Delay(3000); *@
+@*             State.ClearCustomerRide(); *@
+@*             ClearMarkersLocal(); *@
+@*             await JS.InvokeVoidAsync("leafletInterop.clearMarkers"); *@
+@*             await InvokeAsync(StateHasChanged); *@
+@*         } *@
+@*         await InvokeAsync(StateHasChanged); *@
+@*     } *@
+@* *@
+@*     private async void HandleRideDeclined(string _) *@
+@*     { *@
+@*         State.UpdateCustomerRideStatus("Declined"); *@
+@*         Log("Driver declined your ride. Looking for another driver…", "warning"); *@
+@*         await InvokeAsync(StateHasChanged); *@
+@*         await Task.Delay(2000); *@
+@*         State.UpdateCustomerRideStatus("Requested"); *@
+@*         await InvokeAsync(StateHasChanged); *@
+@*     } *@
+@* *@
+@*     private void StartCountdown() *@
+@*     { *@
+@*         _rideTimer?.Dispose(); *@
+@*         _rideCreatedAt = DateTime.UtcNow; *@
+@*         _timeRemaining = TimeSpan.FromMinutes(1); *@
+@* *@
+@*         _rideTimer = new Timer(async _ => *@
+@*         { *@
+@*             _timeRemaining = TimeSpan.FromMinutes(1) - (DateTime.UtcNow - _rideCreatedAt); *@
+@* *@
+@*             if (_timeRemaining <= TimeSpan.Zero) *@
+@*             { *@
+@*                 _rideTimer?.Dispose(); *@
+@*                 _rideTimer = null; *@
+@* *@
+@*                 if (State.CustomerRideStatus == "Requested") *@
+@*                 { *@
+@*                     try *@
+@*                     { *@
+@*                         await Api.CancelAsync(State.CustomerRideId!); *@
+@*                         State.UpdateCustomerRideStatus("Cancelled"); *@
+@*                         Log("No driver found. Ride auto-cancelled.", "warning"); *@
+@*                         await Task.Delay(2000); *@
+@*                         await InvokeAsync(() => *@
+@*                         { *@
+@*                             State.ClearCustomerRide(); *@
+@*                             ClearMarkersLocal(); *@
+@*                             _ = JS.InvokeVoidAsync("leafletInterop.clearMarkers"); *@
+@*                             StateHasChanged(); *@
+@*                         }); *@
+@*                     } *@
+@*                     catch (Exception ex) *@
+@*                     { *@
+@*                         Log($"Auto-cancel failed: {ex.Message}", "error"); *@
+@*                     } *@
+@*                 } *@
+@*                 return; *@
+@*             } *@
+@* *@
+@*             await InvokeAsync(StateHasChanged); *@
+@*         }, null, TimeSpan.Zero, TimeSpan.FromSeconds(1)); *@
+@*     } *@
+@* *@
+@*     private void Log(string message, string level = "info") *@
+@*         => OnLog.InvokeAsync(new LogEntry { Message = message, Level = level }); *@
+@* *@
+@*     public void Dispose() *@
+@*     { *@
+@*         _rideTimer?.Dispose(); *@
+@*         MapComponent.MapClicked -= HandleMapClick; *@
+@*         SignalR.OnRideDeclined -= HandleRideDeclined; *@
+@*     } *@
+@* } *@
+
+
 @inject AppState State
 @inject ApiService Api
 @inject SignalRService SignalR
@@ -6,7 +392,6 @@
 @implements IDisposable
 @using System.Threading
 
-<!-- Auth Panel -->
 <div class="panel">
     <div class="panel-title">Customer — Auth</div>
     <div class="input-row">
@@ -30,7 +415,6 @@
     }
 </div>
 
-<!-- Create Ride Panel -->
 @if (State.IsCustomerLoggedIn && string.IsNullOrEmpty(State.CustomerRideId))
 {
     <div class="panel">
@@ -65,7 +449,6 @@
     </div>
 }
 
-<!-- Active Ride Panel -->
 @if (!string.IsNullOrEmpty(State.CustomerRideId))
 {
     <div class="panel">
@@ -116,25 +499,47 @@
     private DateTime _rideCreatedAt;
     private TimeSpan _timeRemaining = TimeSpan.FromMinutes(1);
 
-    private string CountdownText
-    {
-        get
-        {
-            if (_timeRemaining <= TimeSpan.Zero) return "00:00";
-            return $"00:{_timeRemaining.Seconds:D2}";
-        }
-    }
-
+    private string CountdownText => _timeRemaining <= TimeSpan.Zero ? "00:00" : $"00:{_timeRemaining.Seconds:D2}";
     private bool IsUrgent => _timeRemaining < TimeSpan.FromSeconds(15);
 
     protected override void OnInitialized()
     {
         MapComponent.MapClicked += HandleMapClick;
+        
+        // SignalR ივენთების გამოწერა
         SignalR.OnDriverFound += async _ => await HandleSignalR("Accepted", "DriverFound");
         SignalR.OnDriverArrived += async _ => await HandleSignalR("Arrived", "DriverArrived");
         SignalR.OnRideStarted += async _ => await HandleSignalR("OnTheWay", "RideStarted");
         SignalR.OnRideCompleted += async _ => await HandleSignalR("Completed", "RideCompleted");
         SignalR.OnRideDeclined += HandleRideDeclined;
+
+        // 🔥 Principal Addition: სხვა მოწყობილობიდან შესვლის მოსმენა
+        SignalR.OnForceLogout += HandleForceLogout;
+    }
+
+    private async void HandleForceLogout(object data)
+    {
+        await InvokeAsync(async () => 
+        {
+            Log("Force Logout: Session invalidated by another login", "error");
+            
+            _authError = "თქვენ შეხვედით სხვა მოწყობილობიდან. სესია გაუქმებულია.";
+            
+            // ლოკალური წმენდა (სერვერზე Cancel-ის გარეშე)
+            _rideTimer?.Dispose();
+            _rideTimer = null;
+            
+            await SignalR.DisconnectAsync();
+            Api.ClearToken();
+            State.SetCustomerAuth("", "", "");
+            State.ClearCustomerRide();
+            
+            _phone = "";
+            ClearMarkersLocal();
+            await JS.InvokeVoidAsync("leafletInterop.clearMarkers");
+            
+            StateHasChanged();
+        });
     }
 
     private void HandleMapClick(double lat, double lng)
@@ -226,19 +631,21 @@
     {
         _rideTimer?.Dispose();
         _rideTimer = null;
+        
+        // ხელით ლოგაუტისას ვაუქმებთ რეიდს (თუ Requested-ია)
         if (!string.IsNullOrEmpty(State.CustomerRideId))
         {
             try { await Api.CancelAsync(State.CustomerRideId); } catch { }
         }
+
         await SignalR.DisconnectAsync();
         Api.ClearToken();
         State.SetCustomerAuth("", "", "");
         State.ClearCustomerRide();
         _phone = "";
-        _clickCount = 0;
-        _pickup = null;
-        _destination = null;
-        _ = JS.InvokeVoidAsync("leafletInterop.clearMarkers");
+        ClearMarkersLocal();
+        await JS.InvokeVoidAsync("leafletInterop.clearMarkers");
+        Log("Logged out", "info");
     }
 
     private async Task CreateRide()
@@ -251,13 +658,10 @@
                 (decimal)_pickup.Value.lat, (decimal)_pickup.Value.lng,
                 (decimal)_destination.Value.lat, (decimal)_destination.Value.lng);
             State.SetCustomerRide(ride.Id.ToString(), "Requested");
-            Log($"Ride created! Price: {ride.Price:F2} GEL, Distance: {ride.DistanceKm:F1} km", "success");
+            Log($"Ride created! Price: {ride.Price:F2} GEL", "success");
             StartCountdown();
         }
-        catch (Exception ex)
-        {
-            Log($"Create ride failed: {ex.Message}", "error");
-        }
+        catch (Exception ex) { Log($"Create ride failed: {ex.Message}", "error"); }
         finally { _busy = false; }
     }
 
@@ -276,20 +680,14 @@
             State.ClearCustomerRide();
             ClearMarkersLocal();
         }
-        catch (Exception ex)
-        {
-            Log($"Cancel failed: {ex.Message}", "error");
-        }
+        catch (Exception ex) { Log($"Cancel failed: {ex.Message}", "error"); }
         finally { _busy = false; }
     }
 
     private void ClearMarkers()
     {
-        _clickCount = 0;
-        _pickup = null;
-        _destination = null;
-        _ = JS.InvokeVoidAsync("leafletInterop.removeMarker", "pickup");
-        _ = JS.InvokeVoidAsync("leafletInterop.removeMarker", "destination");
+        ClearMarkersLocal();
+        _ = JS.InvokeVoidAsync("leafletInterop.clearMarkers");
     }
 
     private void ClearMarkersLocal()
@@ -314,7 +712,6 @@
             State.ClearCustomerRide();
             ClearMarkersLocal();
             await JS.InvokeVoidAsync("leafletInterop.clearMarkers");
-            await InvokeAsync(StateHasChanged);
         }
         await InvokeAsync(StateHasChanged);
     }
@@ -322,7 +719,7 @@
     private async void HandleRideDeclined(string _)
     {
         State.UpdateCustomerRideStatus("Declined");
-        Log("Driver declined your ride. Looking for another driver…", "warning");
+        Log("Driver declined. Looking for another…", "warning");
         await InvokeAsync(StateHasChanged);
         await Task.Delay(2000);
         State.UpdateCustomerRideStatus("Requested");
@@ -350,7 +747,7 @@
                     {
                         await Api.CancelAsync(State.CustomerRideId!);
                         State.UpdateCustomerRideStatus("Cancelled");
-                        Log("No driver found. Ride auto-cancelled.", "warning");
+                        Log("No driver found. Auto-cancelled.", "warning");
                         await Task.Delay(2000);
                         await InvokeAsync(() =>
                         {
@@ -360,14 +757,10 @@
                             StateHasChanged();
                         });
                     }
-                    catch (Exception ex)
-                    {
-                        Log($"Auto-cancel failed: {ex.Message}", "error");
-                    }
+                    catch { }
                 }
                 return;
             }
-
             await InvokeAsync(StateHasChanged);
         }, null, TimeSpan.Zero, TimeSpan.FromSeconds(1));
     }
@@ -379,6 +772,12 @@
     {
         _rideTimer?.Dispose();
         MapComponent.MapClicked -= HandleMapClick;
+        SignalR.OnDriverFound -= async _ => await HandleSignalR("Accepted", "DriverFound");
+        SignalR.OnDriverArrived -= async _ => await HandleSignalR("Arrived", "DriverArrived");
+        SignalR.OnRideStarted -= async _ => await HandleSignalR("OnTheWay", "RideStarted");
+        SignalR.OnRideCompleted -= async _ => await HandleSignalR("Completed", "RideCompleted");
         SignalR.OnRideDeclined -= HandleRideDeclined;
+        
+        SignalR.OnForceLogout -= HandleForceLogout;
     }
 }
