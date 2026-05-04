@@ -132,7 +132,6 @@ public class SignalRService : IAsyncDisposable
     public HubConnectionState ConnectionState => _connection?.State ?? HubConnectionState.Disconnected;
     public bool IsConnected => ConnectionState == HubConnectionState.Connected;
 
-    // 🔥 Principal Addition: ივენთი სესიის გაუქმებისთვის
     public event Action<object>? OnForceLogout;
 
     public event Action<string>? OnNewRideAvailable;
@@ -169,13 +168,11 @@ public class SignalRService : IAsyncDisposable
         _connection.Reconnected += _ => { OnConnectionChanged?.Invoke(); return Task.CompletedTask; };
         _connection.Reconnecting += _ => { OnConnectionChanged?.Invoke(); return Task.CompletedTask; };
 
-        // 🚀 🔥 აი ეს არის მთავარი ხაზი, რომელიც აკავშირებს ბექენდს ფრონტენდთან
         _connection.On<object>("ForceLogout", data =>
         {
             OnForceLogout?.Invoke(data);
         });
 
-        // სხვა ივენთები (NewRideAvailable, RideTaken და ა.შ.) ...
         _connection.On<object>("NewRideAvailable", data => OnNewRideAvailable?.Invoke(System.Text.Json.JsonSerializer.Serialize(data)));
         _connection.On<object>("RideTaken", data => OnRideTaken?.Invoke(System.Text.Json.JsonSerializer.Serialize(data)));
         _connection.On<object>("DriverFound", data => OnDriverFound?.Invoke(System.Text.Json.JsonSerializer.Serialize(data)));
