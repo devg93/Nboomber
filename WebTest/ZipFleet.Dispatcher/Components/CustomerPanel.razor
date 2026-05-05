@@ -512,9 +512,33 @@
         SignalR.OnRideStarted += async _ => await HandleSignalR("OnTheWay", "RideStarted");
         SignalR.OnRideCompleted += async _ => await HandleSignalR("Completed", "RideCompleted");
         SignalR.OnRideDeclined += HandleRideDeclined;
+        SignalR.OnRideCancelled += HandleRideCancelled;
 
         // 🔥 Principal Addition: სხვა მოწყობილობიდან შესვლის მოსმენა
         SignalR.OnForceLogout += HandleForceLogout;
+    }
+
+    private void HandleRideCancelled(string json)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("rideId", out var idProp) ||
+                doc.RootElement.TryGetProperty("RideId", out idProp))
+            {
+                var id = idProp.GetString();
+                if (!string.IsNullOrEmpty(State.CustomerRideId) && State.CustomerRideId == id)
+                {
+                    _rideTimer?.Dispose();
+                    _rideTimer = null;
+                    State.ClearCustomerRide();
+                    ClearMarkersLocal();
+                    Log("Ride was cancelled", "warning");
+                }
+            }
+        }
+        catch { }
+        InvokeAsync(StateHasChanged);
     }
 
     private async void HandleForceLogout(object data)
@@ -629,14 +653,14 @@
 
     private async Task Logout()
     {
-        _rideTimer?.Dispose();
-        _rideTimer = null;
-        
         // ხელით ლოგაუტისას ვაუქმებთ რეიდს (თუ Requested-ია)
-        if (!string.IsNullOrEmpty(State.CustomerRideId))
+        if (!string.IsNullOrEmpty(State.CustomerRideId) && State.CustomerRideStatus == "Requested")
         {
             try { await Api.CancelAsync(State.CustomerRideId); } catch { }
         }
+
+        _rideTimer?.Dispose();
+        _rideTimer = null;
 
         await SignalR.DisconnectAsync();
         Api.ClearToken();
