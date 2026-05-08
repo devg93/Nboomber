@@ -12,9 +12,12 @@
     <div class="input-row">
         <input type="tel" placeholder="+995 5XX XXX XXX" @bind="_phone" disabled="@State.IsDriverLoggedIn" />
     </div>
+    <div class="input-row">
+        <input type="password" placeholder="Password" @bind="_pin" disabled="@State.IsDriverLoggedIn" />
+    </div>
     <div class="btn-row">
-        <button class="btn btn-accent" @onclick="Register" disabled="@(State.IsDriverLoggedIn || _busy)">Register</button>
         <button class="btn btn-accent" @onclick="Login" disabled="@(State.IsDriverLoggedIn || _busy)">Login</button>
+        <button class="btn btn-accent" @onclick="Register" disabled="@(State.IsDriverLoggedIn || _busy)">Register</button>
         @if (State.IsDriverLoggedIn)
         {
             <button class="btn btn-danger btn-sm" @onclick="Logout">Logout</button>
@@ -150,6 +153,7 @@
                         </button>
                         <button class="btn btn-danger btn-sm" @onclick="DeclineRide" disabled="@_busy">
                             Decline
+                            
                         </button>
                     </div>
                 }
@@ -168,6 +172,8 @@
     [Parameter] public EventCallback<LogEntry> OnLog { get; set; }
 
     private string _phone = "";
+    
+    private string _pin = "";
     private string _authError = "";
     private bool _busy;
     private double? _driverLat;
@@ -284,7 +290,7 @@
         _busy = true;
         try
         {
-            var (token, userId) = await Api.RegisterAsync(_phone, "Driver");
+            var (token, userId) = await Api.RegisterAsync(_phone, "Driver", _pin);
             Api.SetToken(token);
             State.SetDriverAuth(token, userId, _phone);
             await ConnectHub();
@@ -305,7 +311,7 @@
         _busy = true;
         try
         {
-            var result = await Api.LoginAsync(_phone);
+            var result = await Api.LoginAsync(_phone, _pin);
             Api.SetToken(result.AccessToken);
             State.SetDriverAuth(result.AccessToken, "", _phone);
             await ConnectHub();
@@ -356,6 +362,7 @@
         State.SetDriverOnline(false);
         State.ClearDriverActiveRide();
         _phone = "";
+        _pin = "";
         _rideOffers.Clear();
         _driverLat = null;
         _driverLng = null;

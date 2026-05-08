@@ -11,8 +11,8 @@ public class LogEntry
 }
 
 public record AuthResponse(string AccessToken);
-public record LoginRequest(string PhoneNumber);
-public record RegisterRequest(string PhoneNumber, string Role);
+public record LoginRequest(string PhoneNumber, string Pin);
+public record RegisterRequest(string PhoneNumber, string Role, string Pin);
 public record RegisterResponse(Guid UserId, string Role);
 
 public record CreateRideRequest(
