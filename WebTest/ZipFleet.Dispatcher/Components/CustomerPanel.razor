@@ -397,9 +397,12 @@
     <div class="input-row">
         <input type="tel" placeholder="+995 5XX XXX XXX" @bind="_phone" disabled="@State.IsCustomerLoggedIn" />
     </div>
+    <div class="input-row">
+        <input type="password" placeholder="Password" @bind="_pin" disabled="@State.IsCustomerLoggedIn" />
+    </div>
     <div class="btn-row">
-        <button class="btn btn-customer" @onclick="Register" disabled="@(State.IsCustomerLoggedIn || _busy)">Register</button>
         <button class="btn btn-accent" @onclick="Login" disabled="@(State.IsCustomerLoggedIn || _busy)">Login</button>
+        <button class="btn btn-customer" @onclick="Register" disabled="@(State.IsCustomerLoggedIn || _busy)">Register</button>
         @if (State.IsCustomerLoggedIn)
         {
             <button class="btn btn-danger btn-sm" @onclick="Logout">Logout</button>
@@ -489,6 +492,7 @@
     [Parameter] public EventCallback<LogEntry> OnLog { get; set; }
 
     private string _phone = "";
+    private string _pin = "";
     private string _authError = "";
     private bool _busy;
     private (double lat, double lng)? _pickup;
@@ -506,17 +510,20 @@
     {
         MapComponent.MapClicked += HandleMapClick;
         
-        // SignalR ივენთების გამოწერა
-        SignalR.OnDriverFound += async _ => await HandleSignalR("Accepted", "DriverFound");
-        SignalR.OnDriverArrived += async _ => await HandleSignalR("Arrived", "DriverArrived");
-        SignalR.OnRideStarted += async _ => await HandleSignalR("OnTheWay", "RideStarted");
-        SignalR.OnRideCompleted += async _ => await HandleSignalR("Completed", "RideCompleted");
+        SignalR.OnDriverFound += HandleDriverFound;
+        SignalR.OnDriverArrived += HandleDriverArrived;
+        SignalR.OnRideStarted += HandleRideStarted;
+        SignalR.OnRideCompleted += HandleDriverCompleted;
         SignalR.OnRideDeclined += HandleRideDeclined;
         SignalR.OnRideCancelled += HandleRideCancelled;
 
-        // 🔥 Principal Addition: სხვა მოწყობილობიდან შესვლის მოსმენა
         SignalR.OnForceLogout += HandleForceLogout;
     }
+
+    private async void HandleDriverFound(string _) => await HandleSignalR("Accepted", "DriverFound");
+    private async void HandleDriverArrived(string _) => await HandleSignalR("Arrived", "DriverArrived");
+    private async void HandleRideStarted(string _) => await HandleSignalR("OnTheWay", "RideStarted");
+    private async void HandleDriverCompleted(string _) => await HandleSignalR("Completed", "RideCompleted");
 
     private void HandleRideCancelled(string json)
     {
@@ -559,6 +566,7 @@
             State.ClearCustomerRide();
             
             _phone = "";
+            _pin = "";
             ClearMarkersLocal();
             await JS.InvokeVoidAsync("leafletInterop.clearMarkers");
             
@@ -592,7 +600,7 @@
         _busy = true;
         try
         {
-            var (token, userId) = await Api.RegisterAsync(_phone, "Customer");
+            var (token, userId) = await Api.RegisterAsync(_phone, "Customer", _pin);
             Api.SetToken(token);
             State.SetCustomerAuth(token, userId, _phone);
             await ConnectHub();
@@ -613,7 +621,7 @@
         _busy = true;
         try
         {
-            var result = await Api.LoginAsync(_phone);
+            var result = await Api.LoginAsync(_phone, _pin);
             Api.SetToken(result.AccessToken);
             State.SetCustomerAuth(result.AccessToken, "", _phone);
             await ConnectHub();
@@ -667,6 +675,7 @@
         State.SetCustomerAuth("", "", "");
         State.ClearCustomerRide();
         _phone = "";
+        _pin = "";
         ClearMarkersLocal();
         await JS.InvokeVoidAsync("leafletInterop.clearMarkers");
         Log("Logged out", "info");
@@ -796,12 +805,12 @@
     {
         _rideTimer?.Dispose();
         MapComponent.MapClicked -= HandleMapClick;
-        SignalR.OnDriverFound -= async _ => await HandleSignalR("Accepted", "DriverFound");
-        SignalR.OnDriverArrived -= async _ => await HandleSignalR("Arrived", "DriverArrived");
-        SignalR.OnRideStarted -= async _ => await HandleSignalR("OnTheWay", "RideStarted");
-        SignalR.OnRideCompleted -= async _ => await HandleSignalR("Completed", "RideCompleted");
+        SignalR.OnDriverFound -= HandleDriverFound;
+        SignalR.OnDriverArrived -= HandleDriverArrived;
+        SignalR.OnRideStarted -= HandleRideStarted;
+        SignalR.OnRideCompleted -= HandleDriverCompleted;
         SignalR.OnRideDeclined -= HandleRideDeclined;
-        
+        SignalR.OnRideCancelled -= HandleRideCancelled;
         SignalR.OnForceLogout -= HandleForceLogout;
     }
 }

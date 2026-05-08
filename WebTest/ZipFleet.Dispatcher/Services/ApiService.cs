@@ -44,22 +44,22 @@ public class ApiService
     }
 
     // Register then immediately login to obtain a token.
-    public async Task<(string Token, string UserId)> RegisterAsync(string phone, string role)
+    public async Task<(string Token, string UserId)> RegisterAsync(string phone, string role, string pin)
     {
-        var regResp = await _http.PostAsJsonAsync("/api/Auth/register", new RegisterRequest(phone, role));
+        var regResp = await _http.PostAsJsonAsync("/api/Auth/register", new RegisterRequest(phone, role, pin));
         await EnsureSuccessAsync(regResp);
         var reg = await regResp.Content.ReadFromJsonAsync<RegisterResponse>(JsonOptions) ?? throw new Exception("Empty register response");
 
-        var loginResp = await _http.PostAsJsonAsync("/api/Auth/login", new LoginRequest(phone));
+        var loginResp = await _http.PostAsJsonAsync("/api/Auth/login", new LoginRequest(phone, pin));
         await EnsureSuccessAsync(loginResp);
         var auth = await loginResp.Content.ReadFromJsonAsync<AuthResponse>(JsonOptions) ?? throw new Exception("Empty login response");
 
         return (auth.AccessToken, reg.UserId.ToString());
     }
 
-    public async Task<AuthResponse> LoginAsync(string phone)
+    public async Task<AuthResponse> LoginAsync(string phone, string pin)
     {
-        var resp = await _http.PostAsJsonAsync("/api/Auth/login", new LoginRequest(phone));
+        var resp = await _http.PostAsJsonAsync("/api/Auth/login", new LoginRequest(phone, pin));
         await EnsureSuccessAsync(resp);
         return await resp.Content.ReadFromJsonAsync<AuthResponse>(JsonOptions) ?? throw new Exception("Empty response");
     }
