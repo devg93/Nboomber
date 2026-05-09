@@ -11,8 +11,8 @@ public class LogEntry
 }
 
 public record AuthResponse(string AccessToken);
-public record LoginRequest(string PhoneNumber, string Pin);
-public record RegisterRequest(string PhoneNumber, string Role, string Pin);
+public record LoginRequest(string PhoneNumber, string Password);
+public record RegisterRequest(string PhoneNumber, string Role, string Password);
 public record RegisterResponse(Guid UserId, string Role);
 
 public record CreateRideRequest(
@@ -84,7 +84,7 @@ public class LocationRequest
 
 public class ApiSettings
 {
-    public string BaseUrl { get; set; } = "http://localhost:5143";
+    public string BaseUrl { get; set; } = "http://94.130.230.4:5143";
 }
 
 

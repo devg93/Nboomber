@@ -141,7 +141,6 @@ public class SignalRService : IAsyncDisposable
     public event Action<string>? OnRideStarted;
     public event Action<string>? OnRideCompleted;
     public event Action<string>? OnRideCancelled;
-    public event Action<string>? OnRideDeclined;
     public event Action<string>? OnDriverLocationUpdated;
     public event Action? OnConnectionChanged;
 
@@ -180,7 +179,6 @@ public class SignalRService : IAsyncDisposable
         _connection.On<object>("RideStarted", data => OnRideStarted?.Invoke(System.Text.Json.JsonSerializer.Serialize(data)));
         _connection.On<object>("RideCompleted", data => OnRideCompleted?.Invoke(System.Text.Json.JsonSerializer.Serialize(data)));
         _connection.On<object>("RideCancelled", data => OnRideCancelled?.Invoke(System.Text.Json.JsonSerializer.Serialize(data)));
-        _connection.On<object>("RideDeclined", data => OnRideDeclined?.Invoke(System.Text.Json.JsonSerializer.Serialize(data)));
         _connection.On<object>("DriverLocationUpdated", data => OnDriverLocationUpdated?.Invoke(System.Text.Json.JsonSerializer.Serialize(data)));
 
         await _connection.StartAsync();

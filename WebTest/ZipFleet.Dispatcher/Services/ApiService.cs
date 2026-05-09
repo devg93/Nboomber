@@ -43,23 +43,22 @@ public class ApiService
         _http.DefaultRequestHeaders.Authorization = null;
     }
 
-    // Register then immediately login to obtain a token.
-    public async Task<(string Token, string UserId)> RegisterAsync(string phone, string role, string pin)
+    public async Task<(string Token, string UserId)> RegisterAsync(string phone, string role, string password)
     {
-        var regResp = await _http.PostAsJsonAsync("/api/Auth/register", new RegisterRequest(phone, role, pin));
+        var regResp = await _http.PostAsJsonAsync("/api/Auth/register", new RegisterRequest(phone, role, password));
         await EnsureSuccessAsync(regResp);
         var reg = await regResp.Content.ReadFromJsonAsync<RegisterResponse>(JsonOptions) ?? throw new Exception("Empty register response");
 
-        var loginResp = await _http.PostAsJsonAsync("/api/Auth/login", new LoginRequest(phone, pin));
+        var loginResp = await _http.PostAsJsonAsync("/api/Auth/login", new LoginRequest(phone, password));
         await EnsureSuccessAsync(loginResp);
         var auth = await loginResp.Content.ReadFromJsonAsync<AuthResponse>(JsonOptions) ?? throw new Exception("Empty login response");
 
         return (auth.AccessToken, reg.UserId.ToString());
     }
 
-    public async Task<AuthResponse> LoginAsync(string phone, string pin)
+    public async Task<AuthResponse> LoginAsync(string phone, string password)
     {
-        var resp = await _http.PostAsJsonAsync("/api/Auth/login", new LoginRequest(phone, pin));
+        var resp = await _http.PostAsJsonAsync("/api/Auth/login", new LoginRequest(phone, password));
         await EnsureSuccessAsync(resp);
         return await resp.Content.ReadFromJsonAsync<AuthResponse>(JsonOptions) ?? throw new Exception("Empty response");
     }
@@ -118,13 +117,6 @@ public class ApiService
         if (resp.StatusCode == System.Net.HttpStatusCode.NoContent) return null;
         await EnsureSuccessAsync(resp);
         return await resp.Content.ReadFromJsonAsync<RideDto>(JsonOptions);
-    }
-
-    public async Task<RideDto> DeclineRideAsync(string rideId)
-    {
-        var resp = await _http.PostAsync($"/api/rides/{rideId}/decline", null);
-        await EnsureSuccessAsync(resp);
-        return await resp.Content.ReadFromJsonAsync<RideDto>(JsonOptions) ?? throw new Exception("Empty response");
     }
 
     public async Task ToggleAvailabilityAsync(bool isAvailable)

@@ -136,26 +136,15 @@
             <div style="margin-top:8px;">
                 @if (State.DriverActiveRideStatus == "Accepted")
                 {
-                    <div class="btn-row">
-                        <button class="btn btn-accent" style="flex:1" @onclick="ArriveAtPickup" disabled="@_busy">
-                            Arrived at Pickup
-                        </button>
-                        <button class="btn btn-danger btn-sm" @onclick="DeclineRide" disabled="@_busy">
-                            Decline
-                        </button>
-                    </div>
+                    <button class="btn btn-accent btn-block" @onclick="ArriveAtPickup" disabled="@_busy">
+                        Arrived at Pickup
+                    </button>
                 }
                 else if (State.DriverActiveRideStatus == "Arrived")
                 {
-                    <div class="btn-row">
-                        <button class="btn btn-accent" style="flex:1" @onclick="StartTrip" disabled="@_busy">
-                            Start Trip
-                        </button>
-                        <button class="btn btn-danger btn-sm" @onclick="DeclineRide" disabled="@_busy">
-                            Decline
-                            
-                        </button>
-                    </div>
+                    <button class="btn btn-accent btn-block" @onclick="StartTrip" disabled="@_busy">
+                        Start Trip
+                    </button>
                 }
                 else if (State.DriverActiveRideStatus == "OnTheWay")
                 {
@@ -411,23 +400,6 @@
         catch (Exception ex)
         {
             Log($"Accept failed: {ex.Message}", "error");
-        }
-        finally { _busy = false; }
-    }
-
-    private async Task DeclineRide()
-    {
-        if (string.IsNullOrEmpty(State.DriverActiveRideId)) return;
-        _busy = true;
-        try
-        {
-            await Api.DeclineRideAsync(State.DriverActiveRideId);
-            State.ClearDriverActiveRide();
-            Log("Ride declined", "warning");
-        }
-        catch (Exception ex)
-        {
-            Log($"Decline failed: {ex.Message}", "error");
         }
         finally { _busy = false; }
     }
