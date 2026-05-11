@@ -84,7 +84,9 @@ public class LocationRequest
 
 public class ApiSettings
 {
-    public string BaseUrl { get; set; } = "http://94.130.230.4:5143";
+    // public string BaseUrl { get; set; } = "http://94.130.230.4:5143";
+    public string BaseUrl { get; set; } = "http://localhost:5143";
+
 }
 
 
@@ -104,4 +106,79 @@ public class NewRideAvailableEvent
 
     [JsonPropertyName("destinationLocation")]
     public LocationDto Destination { get; set; } = default!;
+}
+
+public record ChatNotification(
+    string Type,
+    string RideId,
+    string MessageId,
+    string SenderRole,
+    string Message,
+    DateTime SentAt,
+    DateTime? EditedAt)
+{
+    public const string ChatType = "chat";
+    public const string ChatEditType = "chat-edit";
+
+    public bool IsEdit => string.Equals(Type, ChatEditType, StringComparison.OrdinalIgnoreCase);
+
+    public static string CreateMessagePayload(string rideId, string messageId, string senderRole, string message, DateTime sentAt)
+    {
+        return JsonSerializer.Serialize(new ChatNotification(
+            ChatType,
+            rideId,
+            messageId,
+            senderRole,
+            message,
+            sentAt,
+            null));
+    }
+
+    public static string CreateEditPayload(string rideId, string messageId, string senderRole, string message, DateTime sentAt)
+    {
+        return JsonSerializer.Serialize(new ChatNotification(
+            ChatEditType,
+            rideId,
+            messageId,
+            senderRole,
+            message,
+            sentAt,
+            DateTime.UtcNow));
+    }
+
+    public static bool TryParse(string raw, out ChatNotification? notification)
+    {
+        notification = null;
+        if (string.IsNullOrWhiteSpace(raw))
+            return false;
+
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<ChatNotification>(raw);
+            if (parsed is not null &&
+                (string.Equals(parsed.Type, ChatType, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(parsed.Type, ChatEditType, StringComparison.OrdinalIgnoreCase)) &&
+                !string.IsNullOrWhiteSpace(parsed.RideId) &&
+                !string.IsNullOrWhiteSpace(parsed.MessageId) &&
+                !string.IsNullOrWhiteSpace(parsed.Message))
+            {
+                notification = parsed;
+                return true;
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        const string legacyPrefix = "CHAT|";
+        if (!raw.StartsWith(legacyPrefix, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var parts = raw.Split('|', 4, StringSplitOptions.None);
+        if (parts.Length != 4 || string.IsNullOrWhiteSpace(parts[2]) || string.IsNullOrWhiteSpace(parts[3]))
+            return false;
+
+        notification = new ChatNotification(ChatType, parts[1], Guid.NewGuid().ToString("N"), parts[2], parts[3], DateTime.UtcNow, null);
+        return true;
+    }
 }

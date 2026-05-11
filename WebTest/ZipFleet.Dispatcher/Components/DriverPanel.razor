@@ -62,6 +62,17 @@
         {
             <div class="coord-display" style="color:var(--text-dim);">🚗 No location set</div>
         }
+        <div class="btn-row" style="margin-top:6px;">
+            <button class="btn btn-accent btn-sm" @onclick="SendTestLocation" disabled="@_busy">
+                Send Test Location (SignalR)
+            </button>
+        </div>
+        @if (!string.IsNullOrEmpty(_locationTestResult))
+        {
+            <div style="font-size:11px;margin-top:4px;color:@(_locationTestResult.StartsWith("OK") ? "var(--accent)" : "var(--danger)");">
+                @_locationTestResult
+            </div>
+        }
     </div>
 
     @* <!-- Incoming Rides Panel (when online, no active ride) --> *@
@@ -153,21 +164,73 @@
                     </button>
                 }
             </div>
+
         </div>
     }
+
+    @* TESTING: standalone chat panel — visible whenever driver is logged in,
+       not gated on having an active/accepted ride. Revert by re-nesting this
+       block inside the Active Ride panel above. *@
+    <div class="panel" @onclick="ClearMessageBadge">
+        <div class="panel-title" style="display:flex;align-items:center;gap:6px;">
+            <span>Customer Chat</span>
+            @if (_incomingMessageBadgeCount > 0)
+            {
+                <button type="button"
+                        class="chat-badge"
+                        title="Mark as read"
+                        @onclick="ClearMessageBadge"
+                        @onclick:stopPropagation="true">
+                    @_incomingMessageBadgeCount new
+                </button>
+            }
+        </div>
+        <div class="chat-thread" id="@_chatContainerId">
+            @if (_chatMessages.Count == 0)
+            {
+                <div class="chat-empty">No messages yet.</div>
+            }
+            else
+            {
+                @foreach (var chat in _chatMessages)
+                {
+                    <div class="chat-row @(chat.IsOutgoing ? "outgoing" : "incoming")">
+                        <article class="chat-bubble">
+                            <div class="chat-meta">
+                                <span class="chat-author">@chat.Author</span>
+                                <span>@chat.SentAt.ToLocalTime().ToString("HH:mm:ss")</span>
+                                @if (chat.IsEdited)
+                                {
+                                    <span class="chat-edited">edited</span>
+                                }
+                            </div>
+                            <div class="chat-message">@chat.Message</div>
+                        </article>
+                    </div>
+                }
+            }
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);margin-top:6px;">
+            Your User ID: <span style="font-family:var(--mono);color:var(--text);">@(string.IsNullOrWhiteSpace(State.DriverId) ? "(unknown — login flow didn't capture it)" : State.DriverId)</span>
+        </div>
+    </div>
 }
 
 @code {
     [Parameter] public EventCallback<LogEntry> OnLog { get; set; }
 
     private string _phone = "";
-    
     private string _pin = "";
     private string _authError = "";
+    private string _locationTestResult = "";
     private bool _busy;
     private double? _driverLat;
     private double? _driverLng;
     private List<RideOffer> _rideOffers = new();
+    private readonly List<ChatLine> _chatMessages = new();
+    private bool _scrollChatToBottom;
+    private int _incomingMessageBadgeCount;
+    private const string _chatContainerId = "driver-chat-thread";
     private Timer? _countdownTimer;
 
     protected override void OnInitialized()
@@ -176,6 +239,7 @@
         SignalR.OnNewRideAvailable += HandleNewRide;
         SignalR.OnRideTaken += HandleRideTaken;
         SignalR.OnRideCancelled += HandleRideCancelled;
+        SignalR.OnReceiveNotification += HandleNotification;
 
         _countdownTimer = new Timer(_ =>
         {
@@ -188,6 +252,15 @@
                 StateHasChanged();
             });
         }, null, TimeSpan.Zero, TimeSpan.FromSeconds(1));
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_scrollChatToBottom)
+        {
+            _scrollChatToBottom = false;
+            await JS.InvokeVoidAsync("appInterop.scrollToBottomById", _chatContainerId);
+        }
     }
 
     private async void HandleMapClick(double lat, double lng)
@@ -264,6 +337,7 @@
 
                 if (!string.IsNullOrEmpty(State.DriverActiveRideId) && State.DriverActiveRideId == id)
                 {
+                    ClearChatState();
                     State.ClearDriverActiveRide();
                     Log("Customer cancelled the ride", "warning");
                 }
@@ -271,6 +345,22 @@
         }
         catch { }
         InvokeAsync(StateHasChanged);
+    }
+
+    private void HandleNotification(string message)
+    {
+        if (ChatNotification.TryParse(message, out var chat) && chat is not null)
+        {
+            // TESTING: accept every chat notification into the panel, even before
+            // we've accepted a ride. When we re-lock chat to active rides only,
+            // restore the `State.DriverActiveRideId` match filter here.
+            UpsertChatMessage(chat);
+            _ = InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        Log($"შეტყობინება: {message}", "success");
+        _ = InvokeAsync(StateHasChanged);
     }
 
     private async Task Register()
@@ -353,6 +443,7 @@
         _phone = "";
         _pin = "";
         _rideOffers.Clear();
+        ClearChatState();
         _driverLat = null;
         _driverLng = null;
         _ = JS.InvokeVoidAsync("leafletInterop.removeMarker", "driver");
@@ -462,6 +553,7 @@
         try
         {
             await Api.CompleteAsync(State.DriverActiveRideId);
+            ClearChatState();
             State.ClearDriverActiveRide();
             Log("Trip completed!", "success");
         }
@@ -469,8 +561,64 @@
         finally { _busy = false; }
     }
 
+    private async Task SendTestLocation()
+    {
+        _busy = true;
+        _locationTestResult = "";
+        try
+        {
+            var lat = (decimal)(_driverLat ?? 41.6938);
+            var lng = (decimal)(_driverLng ?? 44.8015);
+            var reply = await SignalR.InvokeAsync<string>("update-driver-location", lat, lng);
+            _locationTestResult = $"OK — {reply} ({lat:F4}, {lng:F4})";
+            Log($"update-driver-location reply: {reply}", "success");
+        }
+        catch (Exception ex)
+        {
+            _locationTestResult = $"Error: {ex.Message}";
+            Log($"update-driver-location failed: {ex.Message}", "error");
+        }
+        finally { _busy = false; }
+    }
+
     private void Log(string message, string level = "info")
         => OnLog.InvokeAsync(new LogEntry { Message = message, Level = level });
+
+    private void ClearChatState()
+    {
+        _chatMessages.Clear();
+        _incomingMessageBadgeCount = 0;
+        _scrollChatToBottom = false;
+    }
+
+    private void ClearMessageBadge()
+    {
+        if (_incomingMessageBadgeCount == 0) return;
+        _incomingMessageBadgeCount = 0;
+    }
+
+    private void UpsertChatMessage(ChatNotification chat)
+    {
+        var existingIndex = _chatMessages.FindIndex(m => m.MessageId == chat.MessageId);
+        var isOutgoing = string.Equals(chat.SenderRole, "Driver", StringComparison.OrdinalIgnoreCase);
+        var line = new ChatLine(
+            chat.MessageId,
+            string.Equals(chat.SenderRole, "Driver", StringComparison.OrdinalIgnoreCase) ? "Driver" : "Customer",
+            chat.Message,
+            isOutgoing,
+            chat.SentAt,
+            chat.IsEdit || chat.EditedAt.HasValue);
+
+        if (existingIndex >= 0)
+            _chatMessages[existingIndex] = line;
+        else
+            _chatMessages.Add(line);
+
+        if (!isOutgoing && existingIndex < 0)
+            _incomingMessageBadgeCount++;
+
+        _scrollChatToBottom = true;
+    }
 
     private class RideOffer
     {
@@ -491,6 +639,8 @@
         }
     }
 
+    private record ChatLine(string MessageId, string Author, string Message, bool IsOutgoing, DateTime SentAt, bool IsEdited);
+
     public void Dispose()
     {
         _countdownTimer?.Dispose();
@@ -498,5 +648,6 @@
         SignalR.OnNewRideAvailable -= HandleNewRide;
         SignalR.OnRideTaken -= HandleRideTaken;
         SignalR.OnRideCancelled -= HandleRideCancelled;
+        SignalR.OnReceiveNotification -= HandleNotification;
     }
 }

@@ -481,10 +481,94 @@
 
         <div style="margin-top:8px;">
             <button class="btn btn-danger btn-sm" @onclick="CancelRide"
-                    disabled="@(State.CustomerRideStatus == "Completed" || State.CustomerRideStatus == "Cancelled" || _busy)">
+                    disabled="@(IsRideClosed || _busy)">
                 Cancel Ride
             </button>
         </div>
+
+        @if (!IsRideClosed)
+        {
+            <div class="chat-panel">
+                <div class="info-label" style="margin-bottom:6px;">Chat with driver</div>
+                <div class="chat-thread" id="@_chatContainerId">
+                    @if (_chatMessages.Count == 0)
+                    {
+                        <div class="chat-empty">No messages yet.</div>
+                    }
+                    else
+                    {
+                        @foreach (var chat in _chatMessages)
+                        {
+                            <div class="chat-row @(chat.IsOutgoing ? "outgoing" : "incoming")">
+                                <article class="chat-bubble">
+                                    <div class="chat-meta">
+                                        <span class="chat-author">@chat.Author</span>
+                                        <span>@chat.SentAt.ToLocalTime().ToString("HH:mm:ss")</span>
+                                        @if (chat.IsEdited)
+                                        {
+                                            <span class="chat-edited">edited</span>
+                                        }
+                                    </div>
+                                    <div class="chat-message">@chat.Message</div>
+                                </article>
+                            </div>
+                        }
+                    }
+                </div>
+                @* TESTING: manual driver ID input so we can chat before a real driver accepts. *@
+                @if (string.IsNullOrWhiteSpace(_activeDriverId))
+                {
+                    <div class="input-row" style="margin-bottom:6px;">
+                        <input type="text"
+                               placeholder="Target Driver ID (Guid) — testing"
+                               @bind="_testDriverId"
+                               @bind:event="oninput"
+                               disabled="@_busy" />
+                    </div>
+                }
+                <div class="input-row">
+                    <input type="text"
+                           placeholder="@(_isEditingLastMessage ? "Edit your last message" : "Write a note for the driver")"
+                           @bind="_chatDraft"
+                           @bind:event="oninput"
+                           @onkeydown="HandleChatKeyDown"
+                           maxlength="200"
+                           disabled="@_busy" />
+                    <button class="btn btn-customer btn-sm"
+                            @onclick="SendMessageToDriver"
+                            disabled="@(_busy || string.IsNullOrWhiteSpace(_chatDraft) || string.IsNullOrWhiteSpace(TargetDriverId))">
+                        @(_isEditingLastMessage ? "Save" : "Send")
+                    </button>
+                </div>
+                <div class="chat-actions">
+                    <button class="btn btn-customer btn-sm"
+                            @onclick="BeginEditLastMessage"
+                            disabled="@(_busy || !CanEditLastOwnMessage)">
+                        Edit Last
+                    </button>
+                    @if (_isEditingLastMessage)
+                    {
+                        <button class="btn btn-danger btn-sm" @onclick="CancelEditMessage" disabled="@_busy">
+                            Cancel
+                        </button>
+                    }
+                </div>
+                @if (!string.IsNullOrWhiteSpace(_messageStatus))
+                {
+                    <div style="font-size:11px;margin-top:4px;color:@MessageStatusColor;">
+                        @_messageStatus
+                    </div>
+                }
+                @if (string.IsNullOrWhiteSpace(_activeDriverId))
+                {
+                    <div style="font-size:11px;margin-top:4px;color:var(--warning);">
+                        @* TESTING: in the temporary debug flow we accept a manual driver ID
+                           so the chat can be exercised before acceptance. *@
+                        Testing mode: paste a Driver ID above to route messages, or wait for a driver to accept.
+                    </div>
+                }
+            </div>
+        }
     </div>
 }
 
@@ -498,6 +582,15 @@
     private (double lat, double lng)? _pickup;
     private (double lat, double lng)? _destination;
     private int _clickCount;
+    private string _chatDraft = "";
+    private string _messageStatus = "";
+    private string? _activeDriverId;
+    private string _testDriverId = ""; // TESTING: manual target so chat works during Requested.
+    private string? _editingMessageId;
+    private bool _isEditingLastMessage;
+    private bool _scrollChatToBottom;
+    private readonly List<ChatLine> _chatMessages = new();
+    private const string _chatContainerId = "customer-chat-thread";
 
     private Timer? _rideTimer;
     private DateTime _rideCreatedAt;
@@ -505,6 +598,20 @@
 
     private string CountdownText => _timeRemaining <= TimeSpan.Zero ? "00:00" : $"00:{_timeRemaining.Seconds:D2}";
     private bool IsUrgent => _timeRemaining < TimeSpan.FromSeconds(15);
+    private bool IsRideClosed => State.CustomerRideStatus is "Completed" or "Cancelled";
+    private string MessageStatusColor => _messageStatus.StartsWith("Sent", StringComparison.OrdinalIgnoreCase)
+        ? "var(--accent)"
+        : _messageStatus.StartsWith("Editing", StringComparison.OrdinalIgnoreCase)
+            ? "var(--warning)"
+            : "var(--danger)";
+    private ChatLine? LastOwnMessage => _chatMessages.LastOrDefault(m => m.IsOutgoing);
+    private bool CanEditLastOwnMessage => LastOwnMessage is not null;
+
+    // TESTING: route via real assigned driver if available, else fall back to the manual testing input.
+    private string TargetDriverId =>
+        !string.IsNullOrWhiteSpace(_activeDriverId)
+            ? _activeDriverId!
+            : (_testDriverId ?? "").Trim();
 
     protected override void OnInitialized()
     {
@@ -515,14 +622,42 @@
         SignalR.OnRideStarted += HandleRideStarted;
         SignalR.OnRideCompleted += HandleDriverCompleted;
         SignalR.OnRideCancelled += HandleRideCancelled;
+        SignalR.OnReceiveNotification += HandleNotification;
 
         SignalR.OnForceLogout += HandleForceLogout;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_scrollChatToBottom)
+        {
+            _scrollChatToBottom = false;
+            await JS.InvokeVoidAsync("appInterop.scrollToBottomById", _chatContainerId);
+        }
     }
 
     private async void HandleDriverFound(string _) => await HandleSignalR("Accepted", "DriverFound");
     private async void HandleDriverArrived(string _) => await HandleSignalR("Arrived", "DriverArrived");
     private async void HandleRideStarted(string _) => await HandleSignalR("OnTheWay", "RideStarted");
     private async void HandleDriverCompleted(string _) => await HandleSignalR("Completed", "RideCompleted");
+
+    private void HandleNotification(string raw)
+    {
+        if (ChatNotification.TryParse(raw, out var chat) && chat is not null)
+        {
+            if (!string.IsNullOrEmpty(State.CustomerRideId) &&
+                string.Equals(chat.RideId, State.CustomerRideId, StringComparison.OrdinalIgnoreCase))
+            {
+                UpsertChatMessage(chat);
+                _messageStatus = "";
+                _ = InvokeAsync(StateHasChanged);
+                return;
+            }
+        }
+
+        Log($"Notification: {raw}", "info");
+        _ = InvokeAsync(StateHasChanged);
+    }
 
     private void HandleRideCancelled(string json)
     {
@@ -539,6 +674,7 @@
                     _rideTimer = null;
                     State.ClearCustomerRide();
                     ClearMarkersLocal();
+                    ClearMessageState();
                     Log("Ride was cancelled", "warning");
                 }
             }
@@ -567,6 +703,7 @@
             _phone = "";
             _pin = "";
             ClearMarkersLocal();
+            ClearMessageState();
             await JS.InvokeVoidAsync("leafletInterop.clearMarkers");
             
             StateHasChanged();
@@ -650,6 +787,7 @@
             if (activeRide != null)
             {
                 State.SetCustomerRide(activeRide.Id.ToString(), activeRide.StatusText);
+                _activeDriverId = activeRide.DriverId?.ToString();
                 Log($"Recovered active ride: {activeRide.Id.ToString()[..8]}…", "success");
                 if (activeRide.StatusText == "Requested")
                     StartCountdown();
@@ -676,6 +814,7 @@
         _phone = "";
         _pin = "";
         ClearMarkersLocal();
+        ClearMessageState();
         await JS.InvokeVoidAsync("leafletInterop.clearMarkers");
         Log("Logged out", "info");
     }
@@ -707,6 +846,7 @@
         {
             await Api.CancelAsync(State.CustomerRideId);
             State.UpdateCustomerRideStatus("Cancelled");
+            ClearMessageState();
             Log($"Ride cancelled", "warning");
             await Task.Delay(1500);
             State.ClearCustomerRide();
@@ -729,6 +869,18 @@
         _destination = null;
     }
 
+    private void ClearMessageState()
+    {
+        _chatDraft = "";
+        _messageStatus = "";
+        _activeDriverId = null;
+        _testDriverId = ""; // TESTING
+        _editingMessageId = null;
+        _isEditingLastMessage = false;
+        _chatMessages.Clear();
+        _scrollChatToBottom = false;
+    }
+
     private async Task HandleSignalR(string status, string eventName)
     {
         if (status != "Requested")
@@ -737,15 +889,156 @@
             _rideTimer = null;
         }
         State.UpdateCustomerRideStatus(status);
+        if (status is "Accepted" or "Arrived" or "OnTheWay")
+            await RefreshAssignedDriverIdAsync();
         Log($"SignalR {eventName} → {status}", "success");
         if (status == "Completed")
         {
+            ClearMessageState();
             await Task.Delay(3000);
             State.ClearCustomerRide();
             ClearMarkersLocal();
             await JS.InvokeVoidAsync("leafletInterop.clearMarkers");
         }
         await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SendMessageToDriver()
+    {
+        if (string.IsNullOrEmpty(State.CustomerRideId) || string.IsNullOrWhiteSpace(_chatDraft))
+            return;
+
+        // TESTING: TargetDriverId falls back to the manual testing input when no driver assigned.
+        var targetId = TargetDriverId;
+        if (string.IsNullOrWhiteSpace(targetId))
+        {
+            _messageStatus = "Driver is not available for chat yet.";
+            return;
+        }
+
+        _busy = true;
+        _messageStatus = "";
+
+        var message = _chatDraft.Trim();
+        var existing = _isEditingLastMessage && !string.IsNullOrWhiteSpace(_editingMessageId)
+            ? _chatMessages.LastOrDefault(x => x.MessageId == _editingMessageId)
+            : null;
+        var messageId = existing?.MessageId ?? Guid.NewGuid().ToString("N");
+        var sentAt = existing?.SentAt ?? DateTime.UtcNow;
+        var payload = existing is null
+            ? ChatNotification.CreateMessagePayload(State.CustomerRideId, messageId, "Customer", message, sentAt)
+            : ChatNotification.CreateEditPayload(State.CustomerRideId, messageId, "Customer", message, sentAt);
+
+        try
+        {
+            await SendChatPayloadToDriver(targetId, payload);
+            UpsertChatMessage(new ChatNotification(
+                existing is null ? ChatNotification.ChatType : ChatNotification.ChatEditType,
+                State.CustomerRideId,
+                messageId,
+                "Customer",
+                message,
+                sentAt,
+                existing is null ? null : DateTime.UtcNow));
+            _chatDraft = "";
+            _editingMessageId = null;
+            _isEditingLastMessage = false;
+            _messageStatus = existing is null ? "Sent to driver" : "Sent edit to driver";
+            Log(existing is null ? $"Message sent to driver: {message}" : $"Message edited for driver: {message}", "success");
+        }
+        catch (Exception ex)
+        {
+            _messageStatus = $"Send failed: {ex.Message}";
+            Log($"Send message failed: {ex.Message}", "error");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task HandleChatKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key != "Enter" || e.ShiftKey)
+            return;
+        if (_busy || string.IsNullOrWhiteSpace(_chatDraft) || string.IsNullOrWhiteSpace(TargetDriverId))
+            return;
+        await SendMessageToDriver();
+    }
+
+    private void BeginEditLastMessage()
+    {
+        var lastOwn = LastOwnMessage;
+        if (lastOwn is null)
+            return;
+
+        _chatDraft = lastOwn.Message;
+        _editingMessageId = lastOwn.MessageId;
+        _isEditingLastMessage = true;
+        _messageStatus = "Editing your last message";
+    }
+
+    private void CancelEditMessage()
+    {
+        _chatDraft = "";
+        _editingMessageId = null;
+        _isEditingLastMessage = false;
+        _messageStatus = "";
+    }
+
+    private void UpsertChatMessage(ChatNotification chat)
+    {
+        var existingIndex = _chatMessages.FindIndex(m => m.MessageId == chat.MessageId);
+        var isOutgoing = string.Equals(chat.SenderRole, "Customer", StringComparison.OrdinalIgnoreCase);
+        var line = new ChatLine(
+            chat.MessageId,
+            string.Equals(chat.SenderRole, "Customer", StringComparison.OrdinalIgnoreCase) ? "Customer" : "Driver",
+            chat.Message,
+            isOutgoing,
+            chat.SentAt,
+            chat.IsEdit || chat.EditedAt.HasValue);
+
+        if (existingIndex >= 0)
+            _chatMessages[existingIndex] = line;
+        else
+            _chatMessages.Add(line);
+
+        _scrollChatToBottom = true;
+    }
+
+    private async Task SendChatPayloadToDriver(string driverId, string payload)
+    {
+        if (!Guid.TryParse(driverId, out var parsedDriverId))
+            throw new Exception("Assigned driver ID is invalid.");
+
+        foreach (var method in new[] { "SendMessageToDriver", "send-message-to-driver" })
+        {
+            try
+            {
+                await SignalR.SendAsync(method, parsedDriverId, payload);
+                return;
+            }
+            catch
+            {
+            }
+        }
+
+        throw new Exception("No compatible driver message hub method was available.");
+    }
+
+    private async Task RefreshAssignedDriverIdAsync()
+    {
+        if (string.IsNullOrEmpty(State.CustomerRideId))
+            return;
+
+        try
+        {
+            var ride = await Api.GetRideAsync(State.CustomerRideId);
+            _activeDriverId = ride.DriverId?.ToString();
+        }
+        catch
+        {
+        }
     }
 
     private void StartCountdown()
@@ -799,6 +1092,9 @@
         SignalR.OnRideStarted -= HandleRideStarted;
         SignalR.OnRideCompleted -= HandleDriverCompleted;
         SignalR.OnRideCancelled -= HandleRideCancelled;
+        SignalR.OnReceiveNotification -= HandleNotification;
         SignalR.OnForceLogout -= HandleForceLogout;
     }
+
+    private record ChatLine(string MessageId, string Author, string Message, bool IsOutgoing, DateTime SentAt, bool IsEdited);
 }

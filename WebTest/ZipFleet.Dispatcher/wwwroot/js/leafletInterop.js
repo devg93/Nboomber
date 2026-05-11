@@ -76,3 +76,9 @@ window.appInterop.getCurrentPosition = function() {
         );
     });
 };
+
+window.appInterop.scrollToBottomById = function(elementId) {
+    var el = document.getElementById(elementId);
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+};

@@ -1,0 +1,143 @@
+@inject SignalRService SignalR
+@implements IDisposable
+
+@if (_isVisible)
+{
+    <aside class="notification-popup" role="status" aria-live="polite" aria-atomic="true">
+        <div class="notification-popup__header">
+            <div>
+                <div class="notification-popup__eyebrow">Live notification</div>
+                <div class="notification-popup__time">@_receivedAt.ToLocalTime().ToString("HH:mm:ss")</div>
+            </div>
+            <button type="button" class="notification-popup__close" @onclick="Close" aria-label="Close notification">
+                Close
+            </button>
+        </div>
+
+        <div class="notification-popup__body">
+            @_message
+        </div>
+    </aside>
+}
+
+<style>
+    .notification-popup {
+        position: fixed;
+        right: 1.25rem;
+        bottom: 1.25rem;
+        width: min(24rem, calc(100vw - 2rem));
+        padding: 1rem;
+        border-radius: 0.9rem;
+        border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+        background:
+            linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, transparent), transparent 38%),
+            var(--panel-bg, var(--surface));
+        color: var(--text);
+        box-shadow: 0 18px 45px rgba(0, 0, 0, 0.38);
+        backdrop-filter: blur(14px);
+        z-index: 1100;
+        animation: notification-popup-in 180ms ease-out;
+    }
+
+    .notification-popup__header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .notification-popup__eyebrow {
+        color: var(--accent);
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+    .notification-popup__time {
+        color: var(--text-dim);
+        font-size: 0.78rem;
+        margin-top: 0.18rem;
+    }
+
+    .notification-popup__body {
+        color: var(--text);
+        font-size: 0.95rem;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+
+    .notification-popup__close {
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--text);
+        border-radius: 999px;
+        padding: 0.35rem 0.75rem;
+        font-size: 0.78rem;
+        cursor: pointer;
+        transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+    }
+
+    .notification-popup__close:hover {
+        border-color: var(--accent);
+        background: rgba(0, 212, 170, 0.1);
+        color: var(--accent);
+    }
+
+    @@keyframes notification-popup-in {
+        from {
+            opacity: 0;
+            transform: translate3d(0, 12px, 0);
+        }
+
+        to {
+            opacity: 1;
+            transform: translate3d(0, 0, 0);
+        }
+    }
+
+    @@media (max-width: 640px) {
+        .notification-popup {
+            right: 1rem;
+            left: 1rem;
+            bottom: 1rem;
+            width: auto;
+        }
+    }
+</style>
+
+@code {
+    private bool _isVisible;
+    private string _message = string.Empty;
+    private DateTime _receivedAt = DateTime.MinValue;
+
+    protected override void OnInitialized()
+    {
+        SignalR.OnReceiveNotification += HandleNotification;
+    }
+
+    private void HandleNotification(string message)
+    {
+        // Chat notifications have a dedicated in-panel UI on both Customer and
+        // Driver panels — don't double-surface them as a corner popup as well.
+        if (ChatNotification.TryParse(message, out _))
+            return;
+
+        _message = message;
+        _receivedAt = DateTime.UtcNow;
+        _isVisible = true;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void Close()
+    {
+        _isVisible = false;
+    }
+
+    public void Dispose()
+    {
+        SignalR.OnReceiveNotification -= HandleNotification;
+    }
+}
