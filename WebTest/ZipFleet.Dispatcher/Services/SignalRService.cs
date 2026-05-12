@@ -1,4 +1,6 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.SignalR.Client;
+using ZipFleet.Dispatcher.Models;
 
 namespace ZipFleet.Dispatcher.Services;
 
@@ -104,6 +106,18 @@ public class SignalRService : IAsyncDisposable
     {
         if (_connection is null || !IsConnected) return;
         await _connection.SendCoreAsync(method, args);
+    }
+
+    // Strongly typed wrapper around the SendMessageToDriver hub method.
+    // The hub signature is: SendMessageToDriver(Guid driverId, string message).
+    // We serialize the typed payload here so callers stay free of JSON concerns.
+    public Task SendDriverOfferAsync(Guid driverId, DriverOfferRequest payload)
+    {
+        if (_connection is null || !IsConnected)
+            throw new InvalidOperationException("SignalR connection is not established.");
+
+        var json = JsonSerializer.Serialize(payload);
+        return _connection.SendCoreAsync("SendMessageToDriver", new object?[] { driverId, json });
     }
 
     public async ValueTask DisposeAsync()

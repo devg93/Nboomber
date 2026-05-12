@@ -63,11 +63,18 @@ public class ApiService
         return await resp.Content.ReadFromJsonAsync<AuthResponse>(JsonOptions) ?? throw new Exception("Empty response");
     }
 
-    public async Task<RideDto> CreateRideAsync(decimal pickupLat, decimal pickupLng, decimal destLat, decimal destLng)
+    public async Task<IReadOnlyList<NearbyDriverInfo>> CreateRideAsync(
+        decimal radiusKm,
+        decimal pickupLat, decimal pickupLng,
+        decimal destLat, decimal destLng)
     {
-        var resp = await _http.PostAsJsonAsync("/api/rides", new CreateRideRequest(pickupLat, pickupLng, destLat, destLng));
+        // Backend route is now [HttpPost(nameof(CreateRide))] → "/api/rides/CreateRide".
+        var resp = await _http.PostAsJsonAsync(
+            "/api/rides/CreateRide",
+            new CreateRideRequest(radiusKm, pickupLat, pickupLng, destLat, destLng));
         await EnsureSuccessAsync(resp);
-        return await resp.Content.ReadFromJsonAsync<RideDto>(JsonOptions) ?? throw new Exception("Empty response");
+        return await resp.Content.ReadFromJsonAsync<IReadOnlyList<NearbyDriverInfo>>(JsonOptions)
+               ?? Array.Empty<NearbyDriverInfo>();
     }
 
     public async Task<RideDto> AcceptRideAsync(string rideId)

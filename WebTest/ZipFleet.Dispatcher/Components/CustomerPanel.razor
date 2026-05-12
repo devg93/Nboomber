@@ -442,6 +442,11 @@
             <div class="coord-display" style="margin-top:4px;color:var(--text-dim);">🏁 Dest: waiting for map click…</div>
         }
 
+        <div class="input-row" style="margin-top:8px;">
+            <label style="font-size:11px;color:var(--text-dim);margin-right:6px;">Radius (km)</label>
+            <input type="number" min="1" step="0.5" @bind="_radiusKm" disabled="@_busy" style="width:80px;" />
+        </div>
+
         <div class="btn-row" style="margin-top:8px;">
             <button class="btn btn-customer" @onclick="CreateRide"
                     disabled="@(!_pickup.HasValue || !_destination.HasValue || _busy)">
@@ -449,6 +454,37 @@
             </button>
             <button class="btn btn-danger btn-sm" @onclick="ClearMarkers">Clear</button>
         </div>
+
+        @if (_nearbyDrivers.Count > 0)
+        {
+            <div class="panel-title" style="margin-top:12px;">Nearby Drivers (@_nearbyDrivers.Count)</div>
+            <p class="hint">Tap a driver to send your offer.</p>
+
+            @foreach (var driver in _nearbyDrivers)
+            {
+                var isSending  = _offeringDriverId == driver.DriverId;
+                var isOffered  = _offeredDriverIds.Contains(driver.DriverId);
+                var isDisabled = isSending || isOffered || _offeringDriverId.HasValue;
+
+                <button type="button"
+                        class="btn btn-customer btn-block"
+                        style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;text-align:left;"
+                        disabled="@isDisabled"
+                        @onclick="() => SelectDriverAsync(driver)">
+                    <span>@driver.PhoneNumber</span>
+                    <span>@DisplayKm(driver.Km) KM · @driver.Price.ToString("F0") GEL</span>
+                    <span style="min-width:60px;text-align:right;">
+                        @if (isSending)   { <text>Sending…</text> }
+                        else if (isOffered) { <text>✓ Sent</text> }
+                    </span>
+                </button>
+            }
+
+            @if (!string.IsNullOrEmpty(_offerError))
+            {
+                <div style="color:var(--danger);font-size:11px;margin-top:6px;">@_offerError</div>
+            }
+        }
     </div>
 }
 
@@ -582,6 +618,14 @@
     private (double lat, double lng)? _pickup;
     private (double lat, double lng)? _destination;
     private int _clickCount;
+    private decimal _radiusKm = 5m;
+    private IReadOnlyList<NearbyDriverInfo> _nearbyDrivers = Array.Empty<NearbyDriverInfo>();
+    private Guid? _offeringDriverId;                       // Driver currently being pinged (per-row spinner).
+    private readonly HashSet<Guid> _offeredDriverIds = new(); // Drivers already pinged (✓ checkmark).
+    private string? _offerError;
+
+    // Visual contract: distance is anchored at a 1 km floor and rounded up to the nearest km.
+    private static int DisplayKm(decimal km) => (int)Math.Max(1m, Math.Ceiling(km));
     private string _chatDraft = "";
     private string _messageStatus = "";
     private string? _activeDriverId;
@@ -825,15 +869,61 @@
         _busy = true;
         try
         {
-            var ride = await Api.CreateRideAsync(
+            var drivers = await Api.CreateRideAsync(
+                _radiusKm,
                 (decimal)_pickup.Value.lat, (decimal)_pickup.Value.lng,
                 (decimal)_destination.Value.lat, (decimal)_destination.Value.lng);
-            State.SetCustomerRide(ride.Id.ToString(), "Requested");
-            Log($"Ride created! Price: {ride.Price:F2} GEL", "success");
-            StartCountdown();
+
+            // Nearest first.
+            _nearbyDrivers = drivers.OrderBy(d => d.Km).ToList();
+            _offeredDriverIds.Clear();
+            _offerError = null;
+
+            if (_nearbyDrivers.Count == 0)
+            {
+                Log($"No drivers found within {_radiusKm:F1} km", "warning");
+            }
+            else
+            {
+                Log($"Found {_nearbyDrivers.Count} nearby driver(s) within {_radiusKm:F1} km", "success");
+            }
         }
         catch (Exception ex) { Log($"Create ride failed: {ex.Message}", "error"); }
         finally { _busy = false; }
+    }
+
+    private async Task SelectDriverAsync(NearbyDriverInfo driver)
+    {
+        // Re-entrancy guard: ignore if a send is in flight or this driver was already pinged.
+        if (_offeringDriverId.HasValue || _offeredDriverIds.Contains(driver.DriverId))
+            return;
+
+        if (!SignalR.IsConnected)
+        {
+            _offerError = "Not connected. Try again in a moment.";
+            return;
+        }
+
+        _offeringDriverId = driver.DriverId;
+        _offerError = null;
+
+        var payload = new DriverOfferRequest(DisplayKm(driver.Km), driver.Price);
+
+        try
+        {
+            await SignalR.SendDriverOfferAsync(driver.DriverId, payload);
+            _offeredDriverIds.Add(driver.DriverId);
+            Log($"Offer sent to {driver.PhoneNumber} · {payload.Km} km · {payload.Price:F0} GEL", "success");
+        }
+        catch (Exception ex)
+        {
+            _offerError = $"Could not notify {driver.PhoneNumber}: {ex.Message}";
+            Log($"Send driver offer failed: {ex.Message}", "error");
+        }
+        finally
+        {
+            _offeringDriverId = null;
+        }
     }
 
     private async Task CancelRide()
@@ -867,6 +957,10 @@
         _clickCount = 0;
         _pickup = null;
         _destination = null;
+        _nearbyDrivers = Array.Empty<NearbyDriverInfo>();
+        _offeredDriverIds.Clear();
+        _offeringDriverId = null;
+        _offerError = null;
     }
 
     private void ClearMessageState()

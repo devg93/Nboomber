@@ -16,8 +16,18 @@ public record RegisterRequest(string PhoneNumber, string Role, string Password);
 public record RegisterResponse(Guid UserId, string Role);
 
 public record CreateRideRequest(
+    decimal RadiusKm,
     decimal PickupLatitude, decimal PickupLongitude,
     decimal DestinationLatitude, decimal DestinationLongitude);
+
+public sealed record NearbyDriverInfo(string PhoneNumber, Guid DriverId, decimal Km, decimal Price);
+
+// Payload sent to a driver when the customer selects their offer.
+// Property names are pinned so the wire format stays `{ "km": 2, "price": 15 }`
+// regardless of the ambient JsonSerializerOptions.
+public sealed record DriverOfferRequest(
+    [property: JsonPropertyName("km")] int Km,
+    [property: JsonPropertyName("price")] decimal Price);
 
 public record LocationDto(decimal Latitude, decimal Longitude);
 
